@@ -125,7 +125,8 @@
     <div id="msg"></div>
     <div class="row" style="margin-top:10px">
       <span class="muted">默认下载目录：</span>
-      <input type="text" id="saveDir" placeholder="输入/选择保存目录" style="flex:1;font-size:13px;padding:7px 10px">
+      <input type="text" id="saveDir" placeholder="如 E:\VRGAME" style="flex:1;font-size:13px;padding:7px 10px">
+      <button onclick="pickDir()" title="浏览选择目录">📂</button>
       <button onclick="saveDefaultDir()">保存</button>
     </div>
   </div>
@@ -139,6 +140,7 @@
       <button onclick="allAct('pause')">全部暂停</button>
       <button class="danger" onclick="allAct('cancel')">全部取消</button>
       <button onclick="allAct('clear_done')">清除已完成</button>
+      <button onclick="openSettings()" title="设置">⚙️ 设置</button>
       <span class="muted" id="jobsum" style="margin-left:auto"></span>
     </div>
     <div class="tbwrap"><table id="jobtbl">
@@ -162,6 +164,38 @@
       <button onclick="mkdir()">新建文件夹</button>
       <button class="primary" onclick="confirmDir()">确定</button>
       <div class="cur" id="curPath"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 设置弹窗 -->
+<div class="modal" id="settingsModal">
+  <div class="dlg" style="width:560px">
+    <div class="dlg-h">
+      <span>⚙️ 设置</span>
+      <span class="x" onclick="closeSettings()" title="关闭">×</span>
+    </div>
+    <div style="padding:16px;display:flex;flex-direction:column;gap:14px">
+      <div>
+        <label style="font-weight:600;font-size:13px">MEGA 代理地址</label>
+        <div class="muted" style="font-size:12px;margin:4px 0">访问 MEGA 用的代理。留空 = 直连；通常填本机 Clash 端口（如 http://127.0.0.1:7890）</div>
+        <input type="text" id="cfgProxy" placeholder="http://127.0.0.1:7890 或留空直连" style="width:100%;padding:7px 10px;border:1px solid #d0d7de;border-radius:8px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="font-weight:600;font-size:13px">同时下载的文件数</label>
+        <div class="muted" style="font-size:12px;margin:4px 0">1~16，默认 3。越大越快但越占带宽</div>
+        <input type="number" id="cfgConcurrent" min="1" max="16" value="3" style="width:100%;padding:7px 10px;border:1px solid #d0d7de;border-radius:8px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="font-weight:600;font-size:13px">下载限速（KB/s）</label>
+        <div class="muted" style="font-size:12px;margin:4px 0">0 = 不限速</div>
+        <input type="number" id="cfgRate" min="0" value="0" style="width:100%;padding:7px 10px;border:1px solid #d0d7de;border-radius:8px;font-size:13px;box-sizing:border-box">
+      </div>
+    </div>
+    <div class="dlg-f">
+      <button class="primary" onclick="saveSettings()">保存</button>
+      <button onclick="closeSettings()">取消</button>
+      <span class="muted" id="cfgMsg" style="font-size:12px"></span>
     </div>
   </div>
 </div>
@@ -231,15 +265,9 @@ function renderResult(d){
       h+='<div class="link"><div><span class="badge '+esc(l.type)+'">'+esc(l.label)+'</span>';
       if(l.variant) h+='<span class="var">'+esc(l.variant)+'</span>';
       if(l.code) h+='<span class="code">提取码 '+esc(l.code)+'</span>';
-      // 预检结果：文件数 + 总大小
+      // 预检结果占位：简介先出，文件大小由 precheckAll() 异步填充
       if(l.type==='mega'){
-        if(l.precheck_error){
-          h+='<span class="muted">（无法预检：'+esc(l.precheck_error)+'）</span>';
-        }else if(l.count!==undefined){
-          h+='<span class="badge">'+l.count+' 个文件 · '+fmt(l.total_size||0)+'</span>';
-        }else{
-          h+='<span class="muted">（预检中…）</span>';
-        }
+        h+='<span class="muted" id="pre_'+id+'">（获取文件大小…）</span>';
       }
       h+='</div><span class="u">'+esc(l.url)+'</span><div class="row">';
       if(l.type==='mega'){
@@ -267,6 +295,34 @@ function renderResult(d){
     h+='</div>';
   });
   r.innerHTML=h;
+  // 简介/封面已渲染，异步填充 MEGA 文件大小（不阻塞首屏）
+  precheckAll(d);
+}
+
+// 异步逐个预检 MEGA 链接，填充"文件数 · 大小"
+async function precheckAll(d){
+  d.messages.forEach(msg=>{
+    msg.links.forEach((l,i)=>{
+      if(l.type!=='mega') return;
+      const id='pre_lk'+msg.id+'_'+i;
+      const el=document.getElementById(id);
+      if(!el) return;
+      fetch('/api/precheck',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({url:l.url})})
+        .then(r=>r.json())
+        .then(r=>{
+          if(r.error){
+            el.className='muted';
+            el.textContent='（无法预检：'+r.error+'）';
+          }else{
+            el.className='badge';
+            el.textContent=r.count+' 个文件 · '+fmt(r.total_size||0);
+          }
+        })
+        .catch(()=>{ el.className='muted'; el.textContent='（无法预检）'; });
+    });
+  });
 }
 
 let lastDir = '';
@@ -276,7 +332,43 @@ async function loadConfig(){
     const r = await (await fetch('/api/config')).json();
     lastDir = r.save_dir || '';
     document.getElementById('saveDir').value = lastDir;
+    // 同步到设置弹窗字段
+    document.getElementById('cfgProxy').value = r.proxy || '';
+    document.getElementById('cfgConcurrent').value = r.max_concurrent || 3;
+    document.getElementById('cfgRate').value = r.rate_limit || 0;
   }catch(e){}
+}
+
+function openSettings(){
+  document.getElementById('settingsModal').classList.add('show');
+  document.getElementById('cfgMsg').textContent = '';
+}
+
+function closeSettings(){
+  document.getElementById('settingsModal').classList.remove('show');
+}
+
+async function saveSettings(){
+  const proxy = document.getElementById('cfgProxy').value.trim();
+  const concurrent = parseInt(document.getElementById('cfgConcurrent').value, 10);
+  const rate = parseInt(document.getElementById('cfgRate').value, 10);
+  if(isNaN(concurrent) || concurrent < 1 || concurrent > 16){
+    document.getElementById('cfgMsg').textContent = '并发数需为 1~16 的整数';
+    return;
+  }
+  if(isNaN(rate) || rate < 0){
+    document.getElementById('cfgMsg').textContent = '限速需为 ≥0 的整数';
+    return;
+  }
+  const r = await (await fetch('/api/config',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({proxy, max_concurrent:concurrent, rate_limit:rate})})).json();
+  if(r.error){
+    document.getElementById('cfgMsg').textContent = '保存失败：'+r.error;
+    return;
+  }
+  document.getElementById('cfgMsg').textContent = '已保存 ✓';
+  setTimeout(closeSettings, 600);
 }
 
 async function saveDefaultDir(){
@@ -289,6 +381,32 @@ async function saveDefaultDir(){
   alert('已保存默认目录：'+d);
 }
 
+async function pickDir(){
+  // 弹 Windows 原生目录选择框（exe 所在机器屏幕上）
+  const inp = document.getElementById('saveDir');
+  const old = inp.value;
+  inp.value = '（请在弹出的窗口中选择文件夹…）';
+  inp.disabled = true;
+  try{
+    const r = await (await fetch('/api/pick-dir',{method:'POST'})).json();
+    if(r.ok){
+      inp.value = r.path;
+      // 选完自动保存为默认目录
+      await fetch('/api/config',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({save_dir:r.path})});
+      lastDir = r.path;
+    }else{
+      inp.value = old;
+      if(r.error && r.error !== '已取消选择') alert('选择失败：'+r.error);
+    }
+  }catch(e){
+    inp.value = old;
+    alert('调用失败：'+e);
+  }finally{
+    inp.disabled = false;
+  }
+}
+
 async function openDir(path){
   const d = path || document.getElementById('saveDir').value.trim() || lastDir;
   if(!d) return;
@@ -297,10 +415,14 @@ async function openDir(path){
 }
 
 async function dl(code,url){
-  pendingDl = {code, url};
-  curBrowsePath = lastDir || document.getElementById('saveDir').value.trim() || '';
-  // 若 curBrowsePath 是具体目录则直接进入，否则显示盘符列表
-  openDirModal();
+  // 直接开始下载：用当前默认下载目录，不再弹目录选择
+  let d = document.getElementById('saveDir').value.trim();
+  if(!d){ alert('请先设置默认下载目录（可点文件夹按钮选择）'); return; }
+  const res=await fetch('/api/download',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({code,url,save_dir:d})});
+  const r=await res.json();
+  if(r.error) alert('下载启动失败: '+r.error);
+  pollJobs();
 }
 
 /* ---------------- 目录浏览器 ---------------- */

@@ -2,9 +2,9 @@
 """
 warehouse_data.py — 下载器的「云端数据源」层
 
-下载器不再实时连 Telegram 搜频道，而是用 reimu-warehouse 云端预抓的 data.json 当查询源。
-- 启动/刷新时从 reimu-warehouse.pages.dev/data.json 拉取并缓存到本地 data_cache.json
-- /api/resolve 查本地缓存（秒回，不依赖 Telegram 凭据）
+下载器用 reimu-warehouse 云端预抓的 data.json 当查询源。
+- 启动/刷新时从 reimu-warehouse.pages.dev/data.json 拉取并缓存到本地
+- 查询走本地缓存（秒回）
 
 默认数据源：
   https://reimu-warehouse.pages.dev/data.json   （Cloudflare 公开站）
@@ -12,6 +12,7 @@ warehouse_data.py — 下载器的「云端数据源」层
 """
 
 import os
+import sys
 import io
 import json
 import time
@@ -19,8 +20,12 @@ import threading
 
 import urllib.request
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-LOCAL_CACHE = os.path.join(HERE, '.warehouse_cache.json')
+def _data_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+LOCAL_CACHE = os.path.join(_data_dir(), '.warehouse_cache.json')
 
 # 云端数据源（公开站，无需鉴权）。可环境变量覆盖指向其他源。
 DEFAULT_SOURCE = 'https://reimu-warehouse.pages.dev/data.json'

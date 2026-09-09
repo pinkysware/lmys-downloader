@@ -27,3 +27,9 @@ Thumbs.db
 
 # ---- 云端数据本地缓存(勿提交) ----
 .warehouse_cache.json
+
+# ---- 构建产物 / 打包输出(勿提交) ----
+build/
+dist/
+*.log
+reimu.log

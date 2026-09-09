@@ -41,25 +41,77 @@ app = Flask(__name__)
 jobs = {}
 jobs_lock = threading.Lock()
 
+# 下载并发槽位（Semaphore）。惰性初始化，配置保存后动态调整。
+_dl_slots = None
+
+
+def _get_dl_slots():
+    global _dl_slots
+    if _dl_slots is None:
+        try:
+            n = load_config().get('max_concurrent', 3)
+        except Exception:
+            n = 3
+        _dl_slots = threading.Semaphore(max(1, int(n)))
+    return _dl_slots
+
+
+def _set_dl_slots(n):
+    """配置保存后调整并发槽位数（重建 Semaphore；进行中的下载不受影响）。"""
+    global _dl_slots
+    _dl_slots = threading.Semaphore(max(1, int(n)))
+
 
 # ============ 配置（默认下载目录）============
 def load_config():
-    cfg = {'save_dir': DEFAULT_SAVE}
+    cfg = {
+        'save_dir': DEFAULT_SAVE,
+        'proxy': '',                        # MEGA 代理；空字符串=直连（用户在设置面板填自己的代理）
+        'max_concurrent': 3,                 # 同时下载的文件数
+        'rate_limit': 0,                     # 全局限速 KB/s，0=不限
+    }
     try:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, encoding='utf-8') as fh:
                 d = json.load(fh)
-            if isinstance(d, dict) and d.get('save_dir'):
-                cfg['save_dir'] = d['save_dir']
+            if isinstance(d, dict):
+                if d.get('save_dir'):
+                    cfg['save_dir'] = d['save_dir']
+                if 'proxy' in d:
+                    cfg['proxy'] = d['proxy']
+                if d.get('max_concurrent'):
+                    cfg['max_concurrent'] = int(d['max_concurrent'])
+                if 'rate_limit' in d:
+                    cfg['rate_limit'] = int(d['rate_limit'] or 0)
+    except Exception:
+        pass
+    # 同步到 mega_core 全局代理（运行时动态生效）
+    try:
+        mega_core.PROXY = cfg['proxy']
     except Exception:
         pass
     return cfg
 
 
 def save_config(cfg):
+    """合并保存配置（读旧文件，覆盖传入字段，写回）。"""
     try:
+        merged = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, encoding='utf-8') as fh:
+                    merged = json.load(fh) or {}
+            except Exception:
+                merged = {}
+        merged.update(cfg)
         with open(CONFIG_FILE, 'w', encoding='utf-8') as fh:
-            json.dump(cfg, fh, ensure_ascii=False)
+            json.dump(merged, fh, ensure_ascii=False)
+        # 若更新了代理，同步到 mega_core 全局
+        if 'proxy' in cfg:
+            try:
+                mega_core.PROXY = cfg['proxy']
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -76,7 +128,11 @@ class Job:
         self.threads = {}        # idx -> Thread
         self.folder_id = None
         self.error = None
-        self.rate_limit = 0       # 字节/秒，0=不限
+        # 全局限速（字节/秒，0=不限）。配置存 KB/s，这里 ×1024 转字节/秒。
+        try:
+            self.rate_limit = int(load_config().get('rate_limit', 0) or 0) * 1024
+        except Exception:
+            self.rate_limit = 0
         self.created = time.time()
         self.lock = threading.RLock()   # 可重入：snapshot/to_dict 在锁内又调 cur_state()
 
@@ -127,13 +183,30 @@ class Job:
         for i in range(len(self.files)):
             self._mk_events(i)
         # 按优先级（降序）决定启动顺序；优先级高的先起
-        order = sorted(range(len(self.files)),
-                       key=lambda i: self.files[i].get('priority', 0), reverse=True)
+        self._order = sorted(range(len(self.files)),
+                             key=lambda i: self.files[i].get('priority', 0), reverse=True)
+        self._pump()
+        save_state()
+
+    def _pump(self):
+        """给剩余 waiting 文件抢并发槽位并启动，直到槽位满或无 waiting。
+        注意：只拉 waiting，不碰 paused（暂停是用户主动操作，不自动恢复）。"""
+        order = getattr(self, '_order', None)
+        if order is None:
+            order = sorted(range(len(self.files)),
+                           key=lambda i: self.files[i].get('priority', 0), reverse=True)
+            self._order = order
         for i in order:
             f = self.files[i]
-            if f['state'] in ('waiting', 'paused'):
+            if f['state'] != 'waiting':
+                continue
+            if not _get_dl_slots().acquire(blocking=False):
+                break
+            try:
                 self._spawn(i)
-        save_state()
+            except Exception:
+                _get_dl_slots().release()
+                break
 
     def _spawn(self, i):
         f = self.files[i]
@@ -178,6 +251,12 @@ class Job:
             elif st == 'error':
                 f['error'] = str(n)[:200]
         save_state()
+        # 释放并发槽位，并拉起下一个等待中的文件
+        try:
+            _get_dl_slots().release()
+        except Exception:
+            pass
+        self._pump()
 
     # ---- 状态由各文件实时推导 ----
     def cur_state(self):
@@ -378,34 +457,24 @@ def api_resolve():
 
     result = warehouse_data.to_resolve_result(code, item)
 
-    # 预检：对 MEGA 链接枚举文件清单与总大小（供 UI 下载前展示）
-    precheck = bool(data.get('precheck', False))  # 默认不做 MEGA 预检(快)；需文件清单时前端传 precheck=true
-    if precheck:
-        for m in result.get('messages', []):
-            for link in m.get('links', []):
-                if link['type'] != 'mega':
-                    continue
-                try:
-                    typ, handle, key = mega_core.parse_mega_link(link['url'])
-                    files = []
-                    if typ == 'folder':
-                        files = mega_core.enum_tree(handle, key)
-                        link['files'] = [{
-                            'relpath': f['relpath'], 'name': f['name'],
-                            'size': f['size'],
-                        } for f in files]
-                    else:
-                        from mega_core import api_request, b64_to_a32, _decrypt_attr_name
-                        d0 = api_request({"a": "g", "g": 1, "p": handle})[0]
-                        fkey = b64_to_a32(key)
-                        nm = _decrypt_attr_name({'t': 0, 'a': d0.get('at', '')}, fkey) or handle
-                        link['files'] = [{'relpath': nm, 'name': nm,
-                                          'size': d0.get('s', 0)}]
-                    link['count'] = len(link['files'])
-                    link['total_size'] = sum(f['size'] for f in link['files'])
-                except Exception as e:
-                    link['precheck_error'] = str(e)[:120]
+    # 秒回：不在这里做 MEGA 预检（预检是网络请求，会拖慢首屏）。
+    # 文件数/总大小由前端拿到简介后，异步调 /api/precheck 逐个填充。
     return jsonify(result)
+
+
+@app.post('/api/precheck')
+def api_precheck():
+    """快速获取单个 MEGA 链接的文件数/总大小（前端异步调用，不阻塞简介加载）。
+    body: {url}  ->  {count, total_size} 或 {error}"""
+    data = request.get_json(silent=True) or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': '缺少链接'}), 400
+    try:
+        cnt, total = mega_core.quick_stat(url)
+        return jsonify({'count': cnt, 'total_size': total})
+    except Exception as e:
+        return jsonify({'error': str(e)[:120]}), 502
 
 
 @app.post('/api/refresh')
@@ -435,7 +504,10 @@ def api_download():
     except Exception as e:
         return jsonify({'error': f'解析失败: {e}'}), 500
     try:
-        job.rate_limit = max(0, int(data.get('rate_limit') or 0))
+        # 仅当显式传了 rate_limit 才覆盖；否则保持 Job.__init__ 从配置读的默认限速
+        if data.get('rate_limit') is not None:
+            # data.rate_limit 单位 KB/s，转字节/秒
+            job.rate_limit = max(0, int(data.get('rate_limit') or 0)) * 1024
     except Exception:
         pass
     with jobs_lock:
@@ -452,15 +524,20 @@ def api_jobs():
 
 # ---- 任务级操作 ----
 def _apply_action(job, action):
+    if action == 'resume':
+        # 清掉暂停/取消标志，把可恢复文件置回 waiting，再走 _pump 抢并发槽位
+        for i in range(len(job.files)):
+            ev = job._events(i)
+            ev['pause'].clear()
+            ev['cancel'].clear()
+            if job.files[i]['state'] in ('paused', 'cancelled', 'error'):
+                job.files[i]['state'] = 'waiting'
+        job._pump()
+        return
     for i in range(len(job.files)):
         ev = job._events(i)
         if action == 'pause':
             ev['pause'].set()
-        elif action == 'resume':
-            ev['pause'].clear()
-            ev['cancel'].clear()
-            if job.files[i]['state'] in ('paused', 'cancelled', 'error', 'waiting'):
-                job._spawn(i)
         elif action in ('cancel', 'remove'):
             ev['cancel'].set()
             job.files[i]['state'] = 'cancelled'
@@ -514,7 +591,8 @@ def api_file_action(jid, idx, action):
     elif action == 'resume':
         ev['pause'].clear(); ev['cancel'].clear()
         if f['state'] in ('paused', 'cancelled', 'error', 'waiting'):
-            job._spawn(idx)
+            f['state'] = 'waiting'
+            job._pump()
     elif action == 'cancel':
         ev['cancel'].set()
         f['state'] = 'cancelled'
@@ -574,13 +652,34 @@ def api_config():
 
 @app.post('/api/config')
 def api_config_set():
+    """保存配置（部分字段也可）。可保存：save_dir / proxy / max_concurrent / rate_limit"""
     data = request.get_json(force=True) or {}
-    d = (data.get('save_dir') or '').strip()
-    if not d:
-        return jsonify({'error': '目录不能为空'}), 400
-    cfg = {'save_dir': d}
+    cfg = {}
+    if 'save_dir' in data:
+        d = (data.get('save_dir') or '').strip()
+        if not d:
+            return jsonify({'error': '目录不能为空'}), 400
+        cfg['save_dir'] = d
+    if 'proxy' in data:
+        cfg['proxy'] = (data.get('proxy') or '').strip()
+    if 'max_concurrent' in data:
+        try:
+            cfg['max_concurrent'] = max(1, min(16, int(data.get('max_concurrent') or 3)))
+        except Exception:
+            return jsonify({'error': '并发数需为 1~16 的整数'}), 400
+    if 'rate_limit' in data:
+        try:
+            cfg['rate_limit'] = max(0, int(data.get('rate_limit') or 0))
+        except Exception:
+            return jsonify({'error': '限速需为整数 KB/s'}), 400
     save_config(cfg)
-    return jsonify({'ok': True, 'save_dir': d})
+    # 若改了并发数，重建并发槽位（进行中的下载不受影响，后续新起的文件用新值）
+    if 'max_concurrent' in cfg:
+        try:
+            _set_dl_slots(cfg['max_concurrent'])
+        except Exception:
+            pass
+    return jsonify({'ok': True, **load_config()})
 
 
 @app.post('/api/opendir')
@@ -598,6 +697,147 @@ def api_opendir():
     else:
         subprocess.Popen(['xdg-open', d])
     return jsonify({'ok': True, 'path': d})
+
+
+# ---- Windows 原生目录选择框（IFileDialog, ctypes 标准库实现）----
+def pick_folder_native(title='选择下载目录'):
+    """弹出 Windows 现代目录选择对话框（资源管理器风格：左侧快速访问/此电脑）。
+    返回所选路径字符串；用户取消返回 None；不支持/失败抛异常。
+    注意：对话框出现在运行本服务的机器屏幕上（exe 场景=用户本机）。"""
+    if os.name != 'nt':
+        raise RuntimeError('仅支持 Windows')
+
+    import ctypes
+    from ctypes import wintypes, byref, POINTER, c_void_p, c_wchar_p, c_uint
+
+    class _GUID(ctypes.Structure):
+        _fields_ = [('D1', ctypes.c_ulong), ('D2', ctypes.c_ushort),
+                    ('D3', ctypes.c_ushort), ('D4', ctypes.c_ubyte * 8)]
+
+    def _guid(s):
+        # s: '{DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7}'
+        parts = s.strip('{}').split('-')
+        g = _GUID()
+        g.D1 = int(parts[0], 16)
+        g.D2 = int(parts[1], 16)
+        g.D3 = int(parts[2], 16)
+        b = bytes.fromhex(parts[3] + parts[4])
+        for i in range(8):
+            g.D4[i] = b[i]
+        return g
+
+    CLSID_FileOpenDialog = _guid('{DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7}')
+    IID_IFileDialog      = _guid('{D57C7288-D4AD-4768-BE02-9D969532D960}')
+    IID_IShellItem       = _guid('{43826D1E-E718-42EE-BC55-A1E261C37BFE}')
+
+    FOS_PICKFOLDERS     = 0x20
+    FOS_FORCEFILESYSTEM = 0x40
+    FOS_PATHMUSTEXIST   = 0x800
+    SIGDN_FILESYSPATH   = 0x80058000
+    ERROR_CANCELLED_HR  = 0x800704C7  # HRESULT_FROM_WIN32(ERROR_CANCELLED=1223=0x4C7)
+
+    HRESULT = ctypes.c_long
+    ole32 = ctypes.OleDLL('ole32')   # OleDLL 自动检查 HRESULT
+
+    # 每线程初始化 COM（STA）。已初始化过会报 RPC_E_CHANGED_MODE，容错。
+    try:
+        ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED
+    except OSError:
+        pass
+
+    def _slot(obj, idx, *argtypes):
+        """取 COM 接口 vtable 第 idx 个函数，签名为 (HRESULT, this, *argtypes)"""
+        vtbl = ctypes.cast(obj, POINTER(c_void_p)).contents.value
+        fn = ctypes.cast(vtbl, POINTER(c_void_p))[idx]
+        proto = ctypes.WINFUNCTYPE(HRESULT, c_void_p, *argtypes)
+        return proto(fn), obj
+
+    # CoCreateInstance(CLSID, None, CLSCTX_INPROC_SERVER=1, IID, &pfd)
+    pfd = c_void_p()
+    ole32.CoCreateInstance(byref(CLSID_FileOpenDialog), None, 1,
+                           byref(IID_IFileDialog), byref(pfd))
+    try:
+        # IFileDialog vtable (IUnknown 0-2 之后):
+        # Show=3, SetFileTypes=4, SetFileTypeIndex=5, GetFileTypeIndex=6,
+        # Advise=7, Unadvise=8, SetOptions=9, GetOptions=10,
+        # SetDefaultFolder=11, SetFolder=12, GetFolder=13,
+        # GetCurrentSelection=14, SetFileName=15, SetFileNameLabel=16,
+        # SetOkButtonLabel=17, SetTitle=18, Close=19, AddPlace=20,
+        # SetDefaultExtension=21, SetClientGuid=22, ClearClientData=23,
+        # SetFilter=24, GetResult=25
+        opts = FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST
+        fn, this = _slot(pfd, 9, c_uint)   # SetOptions 按值传 DWORD
+        hr = fn(this, opts)
+        if hr != 0:
+            raise OSError(f'SetOptions failed: {hr:#x}')
+
+        # SetOkButtonLabel -> slot 17
+        try:
+            fn, this = _slot(pfd, 17, c_wchar_p)
+            fn(this, '\u9009\u62e9\u6b64\u6587\u4ef6\u5939')
+        except Exception:
+            pass
+
+        # SetTitle -> slot 18
+        try:
+            fn, this = _slot(pfd, 18, c_wchar_p)
+            fn(this, title)
+        except Exception:
+            pass
+
+        # 取前台窗口作父窗口（避免全屏浏览器盖住对话框）
+        hwnd_owner = None
+        try:
+            hwnd_owner = ctypes.windll.user32.GetForegroundWindow()
+        except Exception:
+            pass
+
+        # Show -> slot 3（阻塞直到用户关闭对话框）
+        fn, this = _slot(pfd, 3, wintypes.HWND)
+        hr = fn(this, hwnd_owner)
+        if hr != 0:
+            # 用户点取消/关闭（X）时返回 ERROR_CANCELLED，视为正常取消
+            if (hr & 0xFFFFFFFF) == ERROR_CANCELLED_HR:
+                return None
+            raise OSError(f'Show failed: {hr:#x}')
+
+        # GetResult -> slot 25
+        psi = c_void_p()
+        fn, this = _slot(pfd, 25, POINTER(c_void_p))
+        hr = fn(this, byref(psi))
+        if hr != 0 or not psi.value:
+            return None
+        try:
+            # IShellItem::GetDisplayName -> slot 5
+            pwsz = c_wchar_p()
+            fn2, this2 = _slot(psi, 5, c_uint, POINTER(c_wchar_p))
+            hr = fn2(this2, SIGDN_FILESYSPATH, byref(pwsz))
+            if hr != 0 or not pwsz.value:
+                return None
+            path = pwsz.value
+            try:
+                ctypes.windll.ole32.CoTaskMemFree(ctypes.cast(pwsz, c_void_p))
+            except Exception:
+                pass
+            return os.path.normpath(path)
+        finally:
+            rel, _ = _slot(psi, 2)
+            rel(psi)
+    finally:
+        rel, _ = _slot(pfd, 2)
+        rel(pfd)
+
+
+@app.post('/api/pick-dir')
+def api_pick_dir():
+    """弹 Windows 原生目录选择框（现代资源管理器风格）。阻塞直到用户选完。"""
+    try:
+        d = pick_folder_native()
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'无法弹出选择框: {e}'}), 500
+    if d:
+        return jsonify({'ok': True, 'path': d})
+    return jsonify({'ok': False, 'error': '已取消选择'})
 
 
 # ---- 目录浏览（网页内目录选择器）----

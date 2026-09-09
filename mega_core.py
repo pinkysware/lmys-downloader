@@ -32,8 +32,15 @@ from Crypto.Util import Counter
 
 MEGA_API = "https://g.api.mega.co.nz/cs"
 import os as _os
-# MEGA API 代理。默认直连；如需代理，设置环境变量 MEGA_PROXY（如 http://127.0.0.1:8080）
+# MEGA API 代理。初始值取自环境变量 MEGA_PROXY，默认空字符串=直连。
+# 注意：这是模块级可变全局，WebUI 保存配置时会由 lmys_web 动态修改（mega_core.PROXY = ...）。
+# 设为空字符串则强制直连（ProxyHandler({}) 绕过系统代理）。
 PROXY = _os.environ.get('MEGA_PROXY', '')
+
+
+def _cur_proxy(proxy):
+    """解析代理：显式传 None 时使用当前模块全局 PROXY（支持运行时动态改）。"""
+    return PROXY if proxy is None else proxy
 
 
 # ============ 加密基础（对照 mega.py crypto.py）============
@@ -147,14 +154,18 @@ def parse_mega_link(url):
     return None, None, None
 
 
-def _opener(proxy=PROXY):
+def _opener(proxy=None):
+    """构造 opener。proxy 非空走指定代理；为空字符串时用 ProxyHandler({}) 显式直连，
+    绕过系统 http_proxy 环境变量。proxy=None 时读当前全局 PROXY。"""
+    proxy = _cur_proxy(proxy)
     if proxy:
         return urllib.request.build_opener(
             urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
-    return urllib.request.build_opener()
+    # 空字典 = 不使用任何代理，强制直连（覆盖系统代理环境变量）
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def api_request(payload, proxy=PROXY, n=None):
+def api_request(payload, proxy=None, n=None):
     """MEGA API 请求，带重试。n 参数放在 URL query（folder 枚举需要）。"""
     url = f"{MEGA_API}?id=0"
     if n:
@@ -191,7 +202,7 @@ def _decrypt_attr_name(node, key_a32):
         return None
 
 
-def enum_tree(folder_id, folder_key, proxy=PROXY):
+def enum_tree(folder_id, folder_key, proxy=None):
     """枚举 folder，返回带子目录层级的文件清单。
 
     父文件夹归属改用节点自带的 p 字段（直接父句柄）向上回溯，
@@ -288,12 +299,56 @@ def enum_tree(folder_id, folder_key, proxy=PROXY):
     return results
 
 
+# ============ 快速预检（单次请求、短超时、不重试）============
+def quick_stat(url, timeout=12):
+    """快速获取 MEGA 链接的文件数/总大小，供 UI 下载前预览。
+    单次请求、短超时、不重试（慢/失败时快速返回，不阻塞主流程）。
+    返回 (count, total_size)。失败抛异常（由调用方容错）。
+
+    注意：folder 用 a:f 一次拿整棵树；file 用 a:g 拿单文件大小。
+    不复用 api_request（那是 8 次重试×1.5s×30s，太重）。
+    """
+    typ, handle, key = parse_mega_link(url)
+    if not typ:
+        raise RuntimeError('无法解析链接')
+
+    # 轻量单次请求
+    payload = {"a": "f", "c": 1, "r": 1} if typ == 'folder' else {"a": "g", "g": 1, "p": handle}
+    req_url = f"{MEGA_API}?id=0"
+    if typ == 'folder':
+        req_url += f"&n={handle}"
+    req = urllib.request.Request(req_url, data=json.dumps([payload]).encode(),
+                                 headers={'Content-Type': 'application/json'})
+    op = _opener()
+    try:
+        data = json.loads(op.open(req, timeout=timeout).read().decode('utf-8', 'ignore'))
+    except Exception as e:
+        raise RuntimeError(f'MEGA 请求失败: {e}')
+
+    if isinstance(data, list) and data and isinstance(data[0], int):
+        raise RuntimeError(f'MEGA 错误码 {data[0]}')
+
+    if typ == 'folder':
+        nodes = data[0]['f']
+        total = 0
+        cnt = 0
+        for n in nodes:
+            if n.get('t') == 0:  # 只统计文件
+                total += n.get('s', 0)
+                cnt += 1
+        return cnt, total
+    else:
+        d0 = data[0]
+        return 1, d0.get('s', 0)
+
+
 # ============ 下载 ============
+
 class FatalError(Exception):
     """不可重试的致命错误（链接失效、文件被删等）"""
 
 
-def _get_download_url(handle, folder_id, is_public, proxy=PROXY):
+def _get_download_url(handle, folder_id, is_public, proxy=None):
     """a:g 取临时下载 URL。匿名 folder 文件必须带 enp。"""
     if is_public:
         payload = {"a": "g", "g": 1, "p": handle}
@@ -336,7 +391,7 @@ def _sync_part(part_path, size):
 
 
 def download_file(handle, file_key_a32, size, dest_path, progress_cb=None,
-                  proxy=PROXY, folder_id=None, is_public=False,
+                  proxy=None, folder_id=None, is_public=False,
                   pause_ev=None, cancel_ev=None, max_retries=5, log=None,
                   rate_limit=0):
     """下载单个文件到 dest_path（支持续传/暂停/重试/配额等待/校验）。
@@ -378,7 +433,11 @@ def download_file(handle, file_key_a32, size, dest_path, progress_cb=None,
     base = ((iv[0] << 32) + iv[1]) << 64
     k_str = a32_to_bytes(list(k))
 
+    proxy = _cur_proxy(proxy)
+    # proxy 非空走代理；为空时 trust_env=False 强制 requests 直连
+    # （否则 requests 会读系统 http_proxy 环境变量，走错代理导致 502/超时）
     proxies = {'http': proxy, 'https': proxy} if proxy else None
+    _trust_env = bool(proxy)
 
     retry = 0
     quota_wait = 60          # 509 配额等待：60s 起，逐次加倍，上限 30min
@@ -415,7 +474,8 @@ def download_file(handle, file_key_a32, size, dest_path, progress_cb=None,
             if offset > 0:
                 headers['Range'] = f'bytes={offset}-'
             resp = requests.get(file_url, headers=headers, stream=True,
-                                proxies=proxies, timeout=(15, 60))
+                                proxies=proxies, timeout=(15, 60),
+                                trust_env=_trust_env)
         except Exception as e:
             retry += 1
             if retry > max_retries:
