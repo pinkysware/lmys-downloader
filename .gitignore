@@ -1,0 +1,26 @@
+# ---- 运行时状态 / 本地数据（勿提交）----
+.lmys_jobs.json
+.lmys_config.json
+.lmys_sync_state.json
+
+# ---- 本机敏感凭据（绝不提交）----
+telegram_config.json
+*.session
+
+# ---- 备份文件 ----
+*.bak
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---- 本地下载产物 ----
+VRGAME/
+downloads/
+*.part
+
+# ---- OS / 编辑器 ----
+.DS_Store
+Thumbs.db

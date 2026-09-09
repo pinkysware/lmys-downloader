@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>灵梦御所下载器</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="alternate icon" type="image/x-icon" href="/static/favicon.ico">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+       background:#f5f6f8;color:#1f2328;line-height:1.5;font-size:14px}
+  .wrap{max-width:1080px;margin:0 auto;padding:16px}
+  h1{font-size:20px;margin:8px 0 16px}
+  h2{font-size:16px;margin:0 0 10px}
+  .card{background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:14px;margin-bottom:14px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input[type=text]{flex:1;min-width:180px;padding:10px 12px;border:1px solid #d0d7de;
+       border-radius:8px;font-size:15px}
+  button{padding:7px 12px;border:1px solid #d0d7de;background:#fff;border-radius:8px;
+       cursor:pointer;font-size:13px;white-space:nowrap}
+  button:hover{background:#f0f2f5}
+  button.primary{background:#2f6feb;color:#fff;border-color:#2f6feb}
+  button.primary:hover{background:#2559c4}
+  button.danger{color:#b3261e;border-color:#f0c2c0}
+  button:disabled{opacity:.45;cursor:default}
+  .muted{color:#656d76;font-size:13px}
+  .badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:12px;
+       background:#eaeef2;color:#3d4750;margin-right:6px;white-space:nowrap}
+  .badge.mega{background:#ffe8e8;color:#b3261e}
+  .badge.magnet{background:#fff4d6;color:#8a5a00}
+  .badge.baidu{background:#e6f0ff;color:#1250a0}
+  .badge.pf{background:#e6f6ec;color:#1a7f37}
+  .link{background:#fafbfc;border:1px solid #e3e6ea;border-radius:8px;padding:10px;margin:8px 0;
+       word-break:break-all}
+  .link .u{font-size:12px;color:#656d76;display:block;margin:4px 0 8px;
+       max-height:3em;overflow:hidden}
+  .var{font-weight:600;margin-right:6px}
+  .flist{margin-top:6px;font-size:12px;color:#57606a}
+  .flist summary{cursor:pointer;color:#1250a0;font-size:12px;margin-bottom:4px}
+  .fi{display:flex;justify-content:space-between;padding:2px 0 2px 12px;
+      border-bottom:1px dashed #eef1f4}
+  .fi span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px}
+  .fi span:last-child{white-space:nowrap;color:#656d76}
+  .code{font-family:ui-monospace,Consolas,monospace;background:#fff4d6;padding:1px 6px;
+       border-radius:4px;margin-right:6px}
+
+  /* ---- 简介 ---- */
+  .intro .irow{display:flex;gap:12px;align-items:flex-start}
+  .intro .thumb{width:118px;border-radius:8px;flex-shrink:0;display:block}
+  .intro .imeta{flex:1;min-width:0}
+  .ititle{font-weight:700;font-size:16px;margin-bottom:6px}
+  .ibody{margin:10px 0;font-size:14px;color:#31363c;white-space:pre-wrap}
+  .tags{margin:6px 0;font-size:13px;color:#656d76}
+  .tag{display:inline-block;background:#eef1f4;border-radius:4px;
+       padding:1px 6px;margin:2px 4px 2px 0}
+  a.open{color:#1250a0;font-weight:600}
+
+  /* ---- 任务表（MegaDownloader 风格）---- */
+  .toolbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;
+           padding-bottom:10px;border-bottom:1px solid #e3e6ea}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-weight:600;color:#57606a;background:#f6f8fa;
+     padding:7px 8px;border-bottom:1px solid #e3e6ea;white-space:nowrap;font-size:12px}
+  td{padding:7px 8px;border-bottom:1px solid #eef1f4;vertical-align:middle}
+  tr:hover td{background:#fafbfc}
+  .nm{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .grp td{background:#f6f8fa;font-weight:600;color:#31363c}
+  .bar{height:7px;background:#e6e8eb;border-radius:4px;overflow:hidden;min-width:70px}
+  .bar>i{display:block;height:100%;background:#2f6feb;width:0}
+  .st-done{color:#1a7f37}.st-error{color:#b3261e}
+  .st-downloading{color:#2f6feb}.st-paused{color:#8a5a00}
+  .st-waiting,.st-cancel,.st-cancelled{color:#656d76}
+  .tbwrap{overflow-x:auto}
+  .err{background:#ffe8e8;color:#b3261e;padding:10px;border-radius:8px;margin:8px 0}
+  /* ---- 右键菜单 ---- */
+  .ctxmenu{position:fixed;z-index:9999;background:#fff;border:1px solid #d0d7de;
+       border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.15);min-width:190px;
+       padding:4px;display:none;font-size:13px}
+  .ctxmenu div{padding:7px 12px;border-radius:6px;cursor:pointer;color:#1f2328}
+  .ctxmenu div:hover{background:#f0f2f5}
+  .ctxmenu div.danger{color:#b3261e}
+  .ctxmenu div.danger:hover{background:#ffe8e8}
+  .ctxmenu .sep{height:1px;background:#e3e6ea;margin:4px 0;padding:0;cursor:default}
+  .ctxmenu .sep:hover{background:#e3e6ea}
+  /* ---- 目录选择器模态框 ---- */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;
+         display:none;align-items:center;justify-content:center}
+  .modal.show{display:flex}
+  .dlg{background:#fff;border-radius:12px;width:520px;max-width:94vw;
+       max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .dlg-h{padding:14px 16px;border-bottom:1px solid #e3e6ea;font-weight:600;
+         display:flex;justify-content:space-between;align-items:center}
+  .dlg-h .x{cursor:pointer;color:#656d76;font-size:18px;line-height:1}
+  .crumb{padding:10px 16px;border-bottom:1px solid #eef1f4;font-size:13px;
+         display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .crumb span{cursor:pointer;color:#1250a0}
+  .crumb span:hover{text-decoration:underline}
+  .crumb b{color:#1f2328}
+  .dlist{flex:1;overflow-y:auto;padding:8px;min-height:200px}
+  .dlist .item{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;cursor:pointer}
+  .dlist .item:hover{background:#f0f2f5}
+  .dlist .item .ic{color:#d9a400}
+  .dlist .empty{color:#656d76;text-align:center;padding:30px;font-size:13px}
+  .dlg-f{padding:12px 16px;border-top:1px solid #e3e6ea;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .dlg-f input{flex:1;min-width:120px;padding:7px 10px;border:1px solid #d0d7de;border-radius:8px;font-size:13px}
+  .dlg-f .cur{width:100%;font-size:12px;color:#656d76;word-break:break-all}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="align-items:baseline;justify-content:space-between">
+    <h1>灵梦御所下载器</h1>
+    <a href="https://blog.reimu.net/" target="_blank" rel="noopener" class="open">灵梦御所官网 ↗</a>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <input type="text" id="code" placeholder="输入资源代码，如 R4191" autocomplete="off">
+      <button class="primary" onclick="resolve()">解析</button>
+    </div>
+    <div class="muted" style="margin-top:8px">
+      R 开头一般为 MEGA（服务端直接下载）；S 开头可能是磁力/百度网盘等（在你当前设备打开）
+    </div>
+    <div id="msg"></div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted">默认下载目录：</span>
+      <input type="text" id="saveDir" placeholder="如 E:\VRGAME" style="flex:1;font-size:13px;padding:7px 10px">
+      <button onclick="saveDefaultDir()">保存</button>
+    </div>
+  </div>
+
+  <div id="result"></div>
+
+  <div class="card" id="jobcard">
+    <h2>下载任务</h2>
+    <div class="toolbar">
+      <button onclick="allAct('resume')">全部继续</button>
+      <button onclick="allAct('pause')">全部暂停</button>
+      <button class="danger" onclick="allAct('cancel')">全部取消</button>
+      <button onclick="allAct('clear_done')">清除已完成</button>
+      <span class="muted" id="jobsum" style="margin-left:auto"></span>
+    </div>
+    <div class="tbwrap"><table id="jobtbl">
+      <thead><tr>
+        <th>文件名称</th><th>大小</th><th>状态</th><th>进度</th>
+        <th>已下载</th><th>速度</th><th>剩余时间</th><th>操作</th>
+      </tr></thead>
+      <tbody id="jobs"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- 目录选择器模态框 -->
+<div class="modal" id="dirModal">
+  <div class="dlg">
+    <div class="dlg-h"><span>选择下载目录</span><span class="x" onclick="closeDir()">×</span></div>
+    <div class="crumb" id="crumb"></div>
+    <div class="dlist" id="dlist"></div>
+    <div class="dlg-f">
+      <input type="text" id="newDirName" placeholder="新建文件夹名">
+      <button onclick="mkdir()">新建文件夹</button>
+      <button class="primary" onclick="confirmDir()">确定</button>
+      <div class="cur" id="curPath"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+async function copyText(t, btn){
+  let ok=false;
+  try{ await navigator.clipboard.writeText(t); ok=true; }catch(e){
+    const ta=document.createElement('textarea'); ta.value=t;
+    ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+    ta.select(); try{ ok=document.execCommand('copy'); }catch(e2){}
+    document.body.removeChild(ta);
+  }
+  if(btn){ const o=btn.textContent; btn.textContent= ok?'已复制':'复制失败';
+           setTimeout(()=>btn.textContent=o, 1200); }
+}
+
+/* ---------------- 解析 ---------------- */
+async function resolve(){
+  const code=document.getElementById('code').value.trim();
+  const m=document.getElementById('msg'), r=document.getElementById('result');
+  if(!code){ m.innerHTML='<div class="err">请输入代码</div>'; return; }
+  m.innerHTML='<div class="muted">正在频道搜索…</div>'; r.innerHTML='';
+  try{
+    const res=await fetch('/api/resolve',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+    const d=await res.json();
+    if(d.error){ m.innerHTML='<div class="err">'+esc(d.error)+'</div>'; return; }
+    m.innerHTML='';
+    if(!d.found){ m.innerHTML='<div class="muted">频道中未找到代码 '+esc(code)+'</div>'; return; }
+    renderResult(d);
+  }catch(e){ m.innerHTML='<div class="err">请求失败: '+esc(e)+'</div>'; }
+}
+
+function introHtml(d){
+  const it=d.intro; let s='<div class="card intro">';
+  s+='<div class="irow">';
+  if(it.has_thumb) s+='<img class="thumb" src="/api/thumb/'+encodeURIComponent(d.code)+'" alt="cover">';
+  s+='<div class="imeta">';
+  s+='<div class="ititle">'+esc(it.title)+'</div>';
+  if(it.platforms&&it.platforms.length)
+    s+='<div>'+it.platforms.map(p=>'<span class="badge pf">'+esc(p)+'</span>').join('')+'</div>';
+  s+='<div class="muted">'+esc(it.channel||'')+' · '+esc(it.date||'')+'</div>';
+  s+='</div></div>';
+  if(it.body) s+='<div class="ibody">'+esc(it.body).replace(/\n/g,'<br>')+'</div>';
+  if(it.categories&&it.categories.length)
+    s+='<div class="tags">分类：'+it.categories.map(t=>'<span class="tag">#'+esc(t)+'</span>').join('')+'</div>';
+  if(it.tags&&it.tags.length)
+    s+='<div class="tags">标签：'+it.tags.map(t=>'<span class="tag">#'+esc(t)+'</span>').join('')+'</div>';
+  if(it.detail_url)
+    s+='<div><a class="open" target="_blank" rel="noopener" href="'+esc(it.detail_url)+
+       '">查看详情页</a></div>';
+  return s+'</div>';
+}
+
+function renderResult(d){
+  const r=document.getElementById('result');
+  let h='';
+  if(d.intro && !d.intro.error) h+=introHtml(d);
+  d.messages.forEach(msg=>{
+    h+='<div class="card"><div class="muted">消息 #'+msg.id+' · '+esc(msg.date)+'</div>';
+    if(!msg.links.length) h+='<div class="muted">该消息未检测到链接</div>';
+    msg.links.forEach((l,i)=>{
+      const id='lk'+msg.id+'_'+i;
+      h+='<div class="link"><div><span class="badge '+esc(l.type)+'">'+esc(l.label)+'</span>';
+      if(l.variant) h+='<span class="var">'+esc(l.variant)+'</span>';
+      if(l.code) h+='<span class="code">提取码 '+esc(l.code)+'</span>';
+      // 预检结果：文件数 + 总大小
+      if(l.type==='mega'){
+        if(l.precheck_error){
+          h+='<span class="muted">（无法预检：'+esc(l.precheck_error)+'）</span>';
+        }else if(l.count!==undefined){
+          h+='<span class="badge">'+l.count+' 个文件 · '+fmt(l.total_size||0)+'</span>';
+        }else{
+          h+='<span class="muted">（预检中…）</span>';
+        }
+      }
+      h+='</div><span class="u">'+esc(l.url)+'</span><div class="row">';
+      if(l.type==='mega'){
+        h+='<button class="primary" onclick=\'dl('+JSON.stringify(d.code)+','+
+           JSON.stringify(l.url)+')\'>下载到本机</button>';
+      }else{
+        h+='<a class="open" target="_blank" rel="noopener" href="'+esc(l.url)+
+           '"><button>在当前设备打开</button></a>';
+      }
+      if(l.code) h+='<button onclick="copyText(\''+esc(l.code)+'\',this)">复制提取码</button>';
+      h+='<button onclick="copyText(document.getElementById(\''+id+
+         '\').dataset.u,this)">复制链接</button>';
+      h+='</div>';
+      // 展开文件清单（MEGA，最多列前 20 个）
+      if(l.type==='mega' && l.files && l.files.length){
+        h+='<details class="flist"><summary>查看文件清单</summary>';
+        l.files.slice(0,20).forEach(f=>{
+          h+='<div class="fi"><span>'+esc(f.relpath)+'</span><span>'+fmt(f.size)+'</span></div>';
+        });
+        if(l.files.length>20) h+='<div class="muted">…还有 '+(l.files.length-20)+' 个文件</div>';
+        h+='</details>';
+      }
+      h+='<span id="'+id+'" data-u="'+esc(l.url)+'" hidden></span></div>';
+    });
+    h+='</div>';
+  });
+  r.innerHTML=h;
+}
+
+let lastDir = '';
+
+async function loadConfig(){
+  try{
+    const r = await (await fetch('/api/config')).json();
+    lastDir = r.save_dir || '';
+    document.getElementById('saveDir').value = lastDir;
+  }catch(e){}
+}
+
+async function saveDefaultDir(){
+  const d = document.getElementById('saveDir').value.trim();
+  if(!d){ alert('目录不能为空'); return; }
+  const r = await (await fetch('/api/config',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({save_dir:d})})).json();
+  if(r.error){ alert('保存失败：'+r.error); return; }
+  lastDir = d;
+  alert('已保存默认目录：'+d);
+}
+
+async function openDir(path){
+  const d = path || document.getElementById('saveDir').value.trim() || lastDir;
+  if(!d) return;
+  await fetch('/api/opendir',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({path:d})});
+}
+
+async function dl(code,url){
+  pendingDl = {code, url};
+  curBrowsePath = lastDir || document.getElementById('saveDir').value.trim() || '';
+  // 若 curBrowsePath 是具体目录则直接进入，否则显示盘符列表
+  openDirModal();
+}
+
+/* ---------------- 目录浏览器 ---------------- */
+let pendingDl = null;
+let curBrowsePath = '';
+
+async function openDirModal(){
+  document.getElementById('dirModal').classList.add('show');
+  if(curBrowsePath){
+    await browseTo(curBrowsePath);
+  }else{
+    await browseTo('');
+  }
+}
+
+function closeDir(){
+  document.getElementById('dirModal').classList.remove('show');
+  pendingDl = null;
+}
+
+async function browseTo(path){
+  curBrowsePath = path || '';
+  const res = await fetch('/api/browse?path='+encodeURIComponent(curBrowsePath));
+  const d = await res.json();
+  if(d.error){ alert('无法打开：'+d.error); return; }
+
+  // 面包屑
+  let crumb = '';
+  if(path){
+    // 拆路径成分级
+    const parts = [];
+    let p = d.path;
+    while(p){
+      const base = p.split(/[\\\/]/).pop() || p;
+      parts.unshift({label: base, path: p});
+      const parent = p.replace(/[\\\/][^\\\/]*$/, '');
+      p = parent && parent !== p ? parent : '';
+    }
+    // 顶部加"此电脑"
+    crumb = '<span onclick="browseTo(\'\')">此电脑</span> / ';
+    parts.forEach((pt, i)=>{
+      crumb += (i>0?' / ':'');
+      if(i === parts.length-1){
+        crumb += '<b>'+esc(pt.label)+'</b>';
+      }else{
+        crumb += '<span onclick="browseTo(\''+esc(pt.path)+'\')">'+esc(pt.label)+'</span>';
+      }
+    });
+  }else{
+    crumb = '<b>此电脑</b>';
+  }
+  document.getElementById('crumb').innerHTML = crumb;
+
+  // 目录列表
+  let h = '';
+  if(d.drives){
+    // 盘符列表
+    d.drives.forEach(dr=>{
+      h += '<div class="item" onclick="browseTo(\''+esc(dr)+'\')">'+
+           '<span class="ic">💾</span>'+esc(dr)+'</div>';
+    });
+  }else if(d.dirs && d.dirs.length){
+    d.dirs.forEach(dn=>{
+      const full = d.path.replace(/[\\\/]$/,'') + '\\' + dn;
+      h += '<div class="item" onclick="browseTo(\''+esc(full)+'\')">'+
+           '<span class="ic">📁</span>'+esc(dn)+'</div>';
+    });
+  }else{
+    h = '<div class="empty">此目录为空</div>';
+  }
+  document.getElementById('dlist').innerHTML = h;
+  document.getElementById('curPath').textContent = curBrowsePath || '（未选择）';
+}
+
+async function mkdir(){
+  const name = document.getElementById('newDirName').value.trim();
+  if(!name){ alert('请输入文件夹名'); return; }
+  if(!curBrowsePath){ alert('请先进入某个盘符'); return; }
+  const r = await (await fetch('/api/mkdir',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({parent:curBrowsePath, name})})).json();
+  if(r.error){ alert('创建失败：'+r.error); return; }
+  document.getElementById('newDirName').value = '';
+  await browseTo(curBrowsePath);
+}
+
+async function confirmDir(){
+  if(!curBrowsePath){ alert('请选择一个目录'); return; }
+  const d = curBrowsePath;
+  lastDir = d;
+  document.getElementById('saveDir').value = d;
+  closeDir();
+  if(pendingDl){
+    const {code, url} = pendingDl;
+    const res=await fetch('/api/download',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({code,url,save_dir:d})});
+    const r=await res.json();
+    if(r.error) alert('下载启动失败: '+r.error);
+    pollJobs();
+    pendingDl = null;
+  }
+}
+
+/* ---------------- 任务表 ---------------- */
+function fmt(n){
+  n=Number(n)||0; const u=['B','KB','MB','GB','TB']; let i=0;
+  while(n>=1024&&i<u.length-1){n/=1024;i++}
+  return (i?n.toFixed(1):Math.round(n))+' '+u[i];
+}
+function fmtSpd(n){ return n>0 ? fmt(n)+'/s' : '-'; }
+function fmtEta(s){
+  if(s===null||s===undefined||s<0) return '-';
+  if(s<60) return s+'秒';
+  if(s<3600) return Math.floor(s/60)+'分'+(s%60)+'秒';
+  return Math.floor(s/3600)+'小时'+Math.floor((s%3600)/60)+'分';
+}
+const ST={done:'完成',error:'失败',downloading:'下载中',paused:'已暂停',
+          waiting:'等待中',cancel:'已取消',cancelled:'已取消'};
+
+let polling=false;
+
+async function pollJobs(){
+  if(polling) return;
+  polling=true;
+  try{
+    const res=await fetch('/api/jobs'); const list=await res.json();
+    // 任务区常驻：即使没有任务也保留表格与工具栏，只清空行
+    if(!list.length){
+      document.getElementById('jobs').innerHTML='';
+      document.getElementById('jobsum').textContent='暂无下载任务';
+      return;
+    }
+    let h='', act=0, totSpd=0;
+    list.forEach(j=>{
+      if(j.state==='working') act++;
+      totSpd+=j.speed||0;
+      h+='<tr class="grp"><td colspan="8"><b>'+esc(j.code)+'</b>'+
+         ' <span class="muted">'+esc(j.save_dir)+'</span></td></tr>';
+      j.files.forEach(f=>{
+        const p=f.size?Math.min(100,f.downloaded/f.size*100):0;
+        const pr = f.priority>0 ? ' ↑'+f.priority : (f.priority<0 ? ' ↓'+(-f.priority) : '');
+        h+='<tr data-jid="'+j.jid+'" data-idx="'+f.idx+'">'+
+          '<td class="nm" title="'+esc(f.relpath)+'">'+esc(f.relpath)+'</td>'+
+          '<td>'+fmt(f.size)+'</td>'+
+          '<td class="st-'+esc(f.state)+'">'+(ST[f.state]||f.state)+pr+
+            (f.error?' <span class="muted">('+esc(f.error)+')</span>':'')+'</td>'+
+          '<td><div class="bar"><i style="width:'+p.toFixed(1)+'%"></i></div>'+
+            '<span class="muted">'+p.toFixed(1)+'%</span></td>'+
+          '<td>'+fmt(f.downloaded)+'</td>'+
+          '<td>'+fmtSpd(f.speed)+'</td>'+
+          '<td>'+fmtEta(f.eta)+'</td>'+
+          '<td><button data-jid="'+j.jid+'" data-idx="'+f.idx+'" data-fact="pause">暂停</button> '+
+              '<button data-jid="'+j.jid+'" data-idx="'+f.idx+'" data-fact="resume">继续</button> '+
+              '<button data-jid="'+j.jid+'" data-idx="'+f.idx+'" data-fact="cancel">取消</button> '+
+              '<button data-jid="'+j.jid+'" data-idx="'+f.idx+'" data-odir="1">打开目录</button></td>'+
+          '</tr>';
+      });
+    });
+    document.getElementById('jobs').innerHTML=h;
+    document.getElementById('jobsum').textContent =
+      '共 '+list.length+' 个任务，'+act+' 个进行中，合计 '+fmtSpd(totSpd);
+  }catch(e){}
+  finally{ polling=false; }
+}
+
+/* 事件委托：行内按钮 = 文件级操作（cancel 现在真正只取消这一个文件） */
+document.getElementById('jobs').addEventListener('mousedown', function(e){
+  const d=e.target.closest('button[data-odir]');
+  if(d){
+    e.preventDefault();
+    fetch('/api/job/'+d.dataset.jid+'/file/'+d.dataset.idx+'/opendir',{method:'POST'});
+    return;
+  }
+  const b=e.target.closest('button[data-fact]');
+  if(!b) return;
+  e.preventDefault();
+  fetch('/api/job/'+b.dataset.jid+'/file/'+b.dataset.idx+'/'+b.dataset.fact,{method:'POST'})
+    .then(pollJobs);
+});
+
+/* ---------------- 右键菜单 ---------------- */
+let ctx={jid:null,idx:null};
+const cm=document.createElement('div'); cm.className='ctxmenu';
+cm.innerHTML=
+  '<div data-m="opendir">打开目录</div>'+
+  '<div class="sep"></div>'+
+  '<div data-m="priority_up">提高优先度</div>'+
+  '<div data-m="priority_down">降低优先度</div>'+
+  '<div class="sep"></div>'+
+  '<div data-m="pause">暂停</div>'+
+  '<div data-m="resume">继续</div>'+
+  '<div data-m="cancel">取消</div>'+
+  '<div class="sep"></div>'+
+  '<div data-m="link">查看连接</div>'+
+  '<div data-m="linkdesc">查看连接与描述</div>'+
+  '<div class="sep"></div>'+
+  '<div data-m="remove_list">从列表删除</div>'+
+  '<div data-m="remove_disk" class="danger">从列表和磁盘删除</div>';
+document.body.appendChild(cm);
+
+document.getElementById('jobs').addEventListener('contextmenu', function(e){
+  const tr=e.target.closest('tr[data-idx]');
+  if(!tr) return;
+  e.preventDefault();
+  ctx.jid=tr.dataset.jid; ctx.idx=tr.dataset.idx;
+  cm.style.display='block';
+  cm.style.left=Math.min(e.clientX, window.innerWidth-210)+'px';
+  cm.style.top=Math.min(e.clientY, window.innerHeight-330)+'px';
+});
+
+document.addEventListener('mousedown', function(e){
+  if(!cm.contains(e.target)) cm.style.display='none';
+});
+
+cm.addEventListener('click', async function(e){
+  const it=e.target.closest('div[data-m]');
+  if(!it || !ctx.jid) return;
+  const m=it.dataset.m; const {jid,idx}=ctx;
+  cm.style.display='none';
+  if(m==='link'||m==='linkdesc'){
+    try{
+      const r=await (await fetch('/api/job/'+jid+'/file/'+idx+'/'+m,{method:'POST'})).json();
+      if(r.url){
+        await copyText(r.url, null);
+        alert(m==='linkdesc'
+          ? r.name+' ('+fmt(r.size)+')\n\n'+r.url+'\n\n链接已复制到剪贴板'
+          : r.url+'\n\n链接已复制到剪贴板');
+      }else{
+        alert('获取连接失败：'+(r.error||'未知'));
+      }
+    }catch(err){ alert('获取连接失败'); }
+    return;
+  }
+  await fetch('/api/job/'+jid+'/file/'+idx+'/'+m,{method:'POST'});
+  pollJobs();
+});
+
+async function allAct(a){
+  await fetch('/api/jobs/'+a,{method:'POST'});
+  pollJobs();
+}
+
+document.getElementById('code').addEventListener('keydown',e=>{
+  if(e.key==='Enter') resolve();
+});
+
+/* 关键：页面加载即拉一次任务，刷新后任务区依然常驻 */
+loadConfig();
+pollJobs();
+setInterval(pollJobs, 1500);
+</script>
+</body>
+</html>

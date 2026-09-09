@@ -1,0 +1,8 @@
+{
+  "api_id": 1234567,
+  "api_hash": "你的_api_hash",
+  "session_string": "你的_telethon_session_string",
+  "proxy_host": "",
+  "proxy_port": 0,
+  "proxy_type": "socks5"
+}
