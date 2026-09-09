@@ -24,3 +24,6 @@ downloads/
 # ---- OS / 编辑器 ----
 .DS_Store
 Thumbs.db
+
+# ---- 云端数据本地缓存(勿提交) ----
+.warehouse_cache.json
