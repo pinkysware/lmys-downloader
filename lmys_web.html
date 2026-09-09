@@ -186,14 +186,14 @@ async function resolve(){
   const code=document.getElementById('code').value.trim();
   const m=document.getElementById('msg'), r=document.getElementById('result');
   if(!code){ m.innerHTML='<div class="err">请输入代码</div>'; return; }
-  m.innerHTML='<div class="muted">正在频道搜索…</div>'; r.innerHTML='';
+  m.innerHTML='<div class="muted">正在云端查询…</div>'; r.innerHTML='';
   try{
     const res=await fetch('/api/resolve',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
     const d=await res.json();
     if(d.error){ m.innerHTML='<div class="err">'+esc(d.error)+'</div>'; return; }
     m.innerHTML='';
-    if(!d.found){ m.innerHTML='<div class="muted">频道中未找到代码 '+esc(code)+'</div>'; return; }
+    if(!d.found){ m.innerHTML='<div class="muted">'+esc((d.error)||('云端未找到代码 '+esc(code)))+'</div>'; return; }
     renderResult(d);
   }catch(e){ m.innerHTML='<div class="err">请求失败: '+esc(e)+'</div>'; }
 }
@@ -201,7 +201,7 @@ async function resolve(){
 function introHtml(d){
   const it=d.intro; let s='<div class="card intro">';
   s+='<div class="irow">';
-  if(it.has_thumb) s+='<img class="thumb" src="/api/thumb/'+encodeURIComponent(d.code)+'" alt="cover">';
+  if(it.cover) s+='<img class="thumb" src="'+esc(it.cover)+'" alt="cover">';
   s+='<div class="imeta">';
   s+='<div class="ititle">'+esc(it.title)+'</div>';
   if(it.platforms&&it.platforms.length)
@@ -224,7 +224,7 @@ function renderResult(d){
   let h='';
   if(d.intro && !d.intro.error) h+=introHtml(d);
   d.messages.forEach(msg=>{
-    h+='<div class="card"><div class="muted">消息 #'+msg.id+' · '+esc(msg.date)+'</div>';
+    h+='<div class="card"><div class="muted">'+esc(d.code)+' · '+esc(d.date||'')+'</div>';
     if(!msg.links.length) h+='<div class="muted">该消息未检测到链接</div>';
     msg.links.forEach((l,i)=>{
       const id='lk'+msg.id+'_'+i;

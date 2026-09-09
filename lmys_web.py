@@ -28,6 +28,7 @@ from flask import Flask, request, jsonify, Response
 
 import lmys_core
 import mega_core
+import warehouse_data
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, 'lmys_web.html')
@@ -355,17 +356,31 @@ def index():
 
 @app.post('/api/resolve')
 def api_resolve():
+    """查代码。数据源 = reimu-warehouse 云端预抓缓存(warehouse_data)，不再实时连 Telegram。"""
     data = request.get_json(force=True) or {}
     code = (data.get('code') or '').strip()
     if not code:
         return jsonify({'error': '请输入资源代码'}), 400
-    try:
-        result = lmys_core.resolve(code, limit=int(data.get('limit', 3)))
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
-    # 预检：对每条消息里的 MEGA 链接，枚举文件清单与总大小（供 UI 下载前展示）
-    precheck = bool(data.get('precheck', True))
+    # 未初始化则先初始化（本地缓存或云端拉取）
+    if not warehouse_data.get_stats().get('count'):
+        warehouse_data.init()
+
+    item = warehouse_data.lookup(code)
+    if not item:
+        return jsonify({
+            'code': code.upper(),
+            'found': False,
+            'messages': [],
+            'intro': None,
+            'error': f'未找到 {code.upper()}（云端已收录 {warehouse_data.get_stats()["count"]} 条，可能该代码较新尚未同步或不在收录范围）',
+            'source': '云端',
+        })
+
+    result = warehouse_data.to_resolve_result(code, item)
+
+    # 预检：对 MEGA 链接枚举文件清单与总大小（供 UI 下载前展示）
+    precheck = bool(data.get('precheck', False))  # 默认不做 MEGA 预检(快)；需文件清单时前端传 precheck=true
     if precheck:
         for m in result.get('messages', []):
             for link in m.get('links', []):
@@ -392,6 +407,13 @@ def api_resolve():
                 except Exception as e:
                     link['precheck_error'] = str(e)[:120]
     return jsonify(result)
+
+
+@app.post('/api/refresh')
+def api_refresh():
+    """从云端刷新数据缓存"""
+    res = warehouse_data.refresh(timeout=int((request.get_json(silent=True) or {}).get('timeout', 60)))
+    return jsonify(res)
 
 
 @app.post('/api/download')
@@ -684,11 +706,18 @@ if __name__ == '__main__':
 
     n = load_state()
     ip = lan_ip()
+
+    # 初始化云端数据缓存（查代码用）。失败静默，不影响启动。
+    wd = warehouse_data.init()
     print('=' * 52)
     print('  灵梦御所下载器 WebUI 已启动')
     print(f'  本机访问 : http://127.0.0.1:{a.port}')
     print(f'  手机/其他设备: http://{ip}:{a.port}')
     print(f'  下载保存到: {DEFAULT_SAVE}\\<代码>\\')
+    if wd.get('count'):
+        print(f'  云端资源: {wd["count"]} 条 (更新于 {wd.get("updated_at", "?")})')
+    else:
+        print('  [警告] 云端资源加载失败，代码查询暂不可用')
     if n:
         print(f'  已恢复 {n} 个历史任务')
     print('=' * 52)
