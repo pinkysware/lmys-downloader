@@ -26,7 +26,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, request, jsonify, Response
 
-import lmys_core
 import mega_core
 import warehouse_data
 
@@ -34,8 +33,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, 'lmys_web.html')
 STATE_FILE = os.path.join(HERE, '.lmys_jobs.json')
 CONFIG_FILE = os.path.join(HERE, '.lmys_config.json')
-# 默认下载目录。可设环境变量 REIMU_SAVE_DIR 覆盖；默认放到用户主目录下的 VRGAME
-DEFAULT_SAVE = os.environ.get('REIMU_SAVE_DIR', '') or os.path.join(os.path.expanduser('~'), 'VRGAME')
+# 默认下载目录。可设环境变量 REIMU_SAVE_DIR 覆盖；默认用户主目录下的 reimu-downloads
+DEFAULT_SAVE = os.environ.get('REIMU_SAVE_DIR', '') or os.path.join(os.path.expanduser('~'), 'reimu-downloads')
 
 app = Flask(__name__)
 
@@ -565,15 +564,6 @@ def api_file_action(jid, idx, action):
 
     save_state()
     return jsonify({'ok': True})
-
-
-@app.get('/api/thumb/<code>')
-def api_thumb(code):
-    """简介封面图（来自文章频道，缓存在内存）"""
-    data = lmys_core.THUMB_CACHE.get((code or '').strip().upper())
-    if not data:
-        return Response(status=404)
-    return Response(data, mimetype='image/jpeg')
 
 
 # ---- 配置（默认下载目录）----

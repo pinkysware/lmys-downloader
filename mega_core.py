@@ -32,7 +32,7 @@ from Crypto.Util import Counter
 
 MEGA_API = "https://g.api.mega.co.nz/cs"
 import os as _os
-# MEGA API 代理。默认直连；如需代理，设置环境变量 MEGA_PROXY（如 http://127.0.0.1:7892）
+# MEGA API 代理。默认直连；如需代理，设置环境变量 MEGA_PROXY（如 http://127.0.0.1:8080）
 PROXY = _os.environ.get('MEGA_PROXY', '')
 
 
