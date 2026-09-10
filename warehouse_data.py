@@ -123,7 +123,7 @@ def get_stats():
 
 
 def lookup(code):
-    """按代码查资源。返回 item 或 None。兼容输入 R4191 / 4191"""
+    """按代码查资源。返回 item 或 None。兼容带前缀与纯数字两种输入"""
     code = (code or '').strip().upper()
     if not code:
         return None
@@ -175,9 +175,9 @@ def to_resolve_result(code, item):
 
 
 # ============ 老代码官网兜底 ============
-# 云端 data.json 覆盖 R2182~R4411；更早的代码（R0099~R2181）官网收录但云端没有。
+# 云端 data.json 只覆盖较新的一部分代码；更早的代码官网收录但云端没有。
 # 通过 Cloudflare Pages Function(/api/search) 实时搜官网，拿「简介 + 简介图」（无下载链接）。
-# 官网代码格式为 4 位补零（R0099 / R0500 / R4195），故查询前先规范化。
+# 官网代码格式为 4 位补零（如 R0123），故查询前先规范化。
 
 OFFICIAL_API = 'https://reimu-warehouse.pages.dev/api/search'
 _official_cache = {}          # code -> (ts, item 或 None)
@@ -259,7 +259,7 @@ def search_official(code, timeout=15):
 
 # ============ MEGA 老代码存档（R0008~R4364，已冻结）============
 # 存档不再更新，映射从云端 archive.json 拉取（本地缓存）。
-# 格式: {root:{handle,key}, items:{ "R1725":[{"sub":"BhZwQAoJ","files":1,"size":263704854}] }}
+# 格式: {root:{handle,key}, items:{ "R0123":[{"sub":"xxxxxxxx","files":1,"size":123456789}] }}
 
 ARCHIVE_URL = 'https://reimu-warehouse.pages.dev/archive.json'
 _archive = None
@@ -308,7 +308,7 @@ def archive_links(code):
         nc = normalize_code(code)
         entry = (a.get('items') or {}).get(nc)
         if not entry and nc.endswith('a'):
-            # 带 a 后缀查不到时退回无后缀（存档目录名多为无后缀，如 A0038）
+            # 带 a 后缀查不到时退回无后缀（存档目录名多为无后缀）
             entry = (a.get('items') or {}).get(nc[:-1])
         if not entry and not nc.endswith('a'):
             # 反向：无后缀查不到时试带 a
