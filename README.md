@@ -32,11 +32,20 @@
 
 ## 运行方式
 
-### 方式一：便携版（推荐给普通用户）
+### 方式一：直接用 exe（推荐给普通用户）
 
-下载 Release 里的 `lmys-downloader-portable.zip`，解压后**双击 `lmys-downloader.exe`** 即可，无需安装 Python。
+下载 Release 里的 `lmys-downloader.exe`，双击即用，**无需安装 Python**。
 
-### 方式二：源码运行
+### 方式二：便携源码包（适合改 bug / 二次开发）
+
+下载 Release 里的 `lmys-downloader-portable.zip`（约 160KB，仅源码 + 启动脚本），解压后：
+
+1. 先装 [Python 3.9+](https://www.python.org/downloads/)（安装时勾选 **Add Python to PATH**）
+2. **双击 `启动.bat`** —— 会自动装依赖并启动，浏览器自动打开
+
+出问题时把 `src/` 目录发给 AI（说明操作和现象），改完**再双击 bat 即可生效**，无需重新打包。
+
+### 方式三：手动源码运行
 
 ```bash
 pip install -r requirements.txt
