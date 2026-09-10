@@ -180,19 +180,34 @@ def to_resolve_result(code, item):
 # 官网代码格式为 4 位补零（R0099 / R0500 / R4195），故查询前先规范化。
 
 OFFICIAL_API = 'https://reimu-warehouse.pages.dev/api/search'
-_official_cache = {}          # code -> item 或 None
+_official_cache = {}          # code -> (ts, item 或 None)
 _official_lock = threading.Lock()
+OFFICIAL_CACHE_TTL = 600      # 缓存 10 分钟（云端接口可能更新，不能永久缓存）
 
 
 def normalize_code(raw):
-    """官网代码规范化：纯数字默认补 R（2999 -> R2999），再补零到 4 位（R100 -> R0100）。"""
-    s = (raw or '').strip().upper()
-    if s.isdigit():
-        s = 'R' + s
-    m = re.match(r'^([RS])(\d{1,6})$', s)
-    if not m:
+    """代码规范化。灵梦御所代码体系（据用户说明）：
+      R=独立资源 S=投稿 Y=女性向 M=音乐 P=图包 C=同人志 A=抢先发布
+      MS=魔穗字幕组 YY=夜桜字幕组；数字后缀 a=全年龄；纯数字=旧地狱资源。
+    规则：前缀 1-3 字母（大写）+ 数字（≤4 位补零到 4 位，>4 位保持）+ 可选 a 后缀（小写）。
+    纯数字保持纯数字（不补 R）；解析不出前缀时原样返回（大写）。
+    """
+    s = (raw or '').strip()
+    if not s:
         return s
-    return m[1] + m[2].zfill(4)
+    m = re.match(r'^([A-Za-z]{1,3})\s*(\d{1,6})\s*([aA]?)$', s)
+    if not m:
+        if s.isdigit():
+            num = s.lstrip('0') or '0'
+            if len(num) <= 4:
+                num = num.zfill(4)
+            return num
+        return s.upper()
+    prefix, digits, suf = m.group(1).upper(), m.group(2), m.group(3)
+    num = digits.lstrip('0') or '0'
+    if len(num) <= 4:
+        num = num.zfill(4)
+    return prefix + num + suf.lower()
 
 
 def search_official(code, timeout=15):
@@ -202,9 +217,11 @@ def search_official(code, timeout=15):
     带内存缓存，同一代码不重复请求。
     """
     code = normalize_code(code)
+    now = time.time()
     with _official_lock:
-        if code in _official_cache:
-            return _official_cache[code]
+        hit = _official_cache.get(code)
+        if hit and now - hit[0] < OFFICIAL_CACHE_TTL:
+            return hit[1]
 
     item = None
     try:
@@ -236,7 +253,7 @@ def search_official(code, timeout=15):
         item = None
 
     with _official_lock:
-        _official_cache[code] = item
+        _official_cache[code] = (now, item)
     return item
 
 
@@ -288,7 +305,14 @@ def archive_links(code):
         h, k = root.get('handle'), root.get('key')
         if not h or not k:
             return []
-        entry = (a.get('items') or {}).get(normalize_code(code))
+        nc = normalize_code(code)
+        entry = (a.get('items') or {}).get(nc)
+        if not entry and nc.endswith('a'):
+            # 带 a 后缀查不到时退回无后缀（存档目录名多为无后缀，如 A0038）
+            entry = (a.get('items') or {}).get(nc[:-1])
+        if not entry and not nc.endswith('a'):
+            # 反向：无后缀查不到时试带 a
+            entry = (a.get('items') or {}).get(nc + 'a')
         if not entry:
             return []
         out = []

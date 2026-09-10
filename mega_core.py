@@ -337,7 +337,7 @@ def quick_stat(url, timeout=12):
     注意：folder 用 a:f 一次拿整棵树；file 用 a:g 拿单文件大小。
     不复用 api_request（那是 8 次重试×1.5s×30s，太重）。
     """
-    typ, handle, key = parse_mega_link(url)
+    typ, handle, key, sub = parse_mega_link_full(url)
     if not typ:
         raise RuntimeError('无法解析链接')
 
@@ -361,10 +361,27 @@ def quick_stat(url, timeout=12):
         nodes = data[0]['f']
         total = 0
         cnt = 0
+        # 指定了子文件夹（存档链接 /folder/<root>#<key>/folder/<sub>）时只统计其子树，
+        # 否则会把整个存档（几千个文件）都算进来
+        parent_of = {n['h']: n.get('p') for n in nodes} if sub else None
+
+        def in_sub(h):
+            cur = h
+            seen = set()
+            while cur and cur not in seen:
+                if cur == sub:
+                    return True
+                seen.add(cur)
+                cur = parent_of.get(cur)
+            return False
+
         for n in nodes:
-            if n.get('t') == 0:  # 只统计文件
-                total += n.get('s', 0)
-                cnt += 1
+            if n.get('t') != 0:      # 只统计文件
+                continue
+            if sub and not in_sub(n.get('p')):
+                continue
+            total += n.get('s', 0)
+            cnt += 1
         return cnt, total
     else:
         d0 = data[0]

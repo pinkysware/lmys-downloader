@@ -13,6 +13,7 @@ lmys_web.py — 灵梦御所下载器 WebUI
 """
 
 import os
+import re
 import sys
 import time
 import uuid
@@ -120,14 +121,18 @@ def save_config(cfg):
 class Job:
     def __init__(self, code, url, save_dir, jid=None):
         self.jid = jid or uuid.uuid4().hex[:8]
-        self.code = code
+        # 安全：清洗代码，只保留字母数字与少数符号，防止 ../ 之类路径穿越
+        safe_code = re.sub(r'[^A-Za-z0-9_\-]', '_', str(code or ''))[:40] or 'MEGA'
+        self.code = safe_code
         self.url = url
-        self.save_dir = os.path.join(save_dir, code)
+        # normpath: 修复 //// 这类畸形分隔符（否则资源管理器打不开会跳默认位置）
+        self.save_dir = os.path.normpath(os.path.join(save_dir, safe_code))
         self.files = []          # [{name,relpath,size,downloaded,state,handle,file_key,is_public,priority}]
         self.events = {}         # idx -> {'pause':Event,'cancel':Event}
         self.threads = {}        # idx -> Thread
         self.folder_id = None
         self.error = None
+        self.preparing = True     # 是否还在解析链接（枚举 MEGA 文件），供 UI 显示"解析中" 
         # 全局限速（字节/秒，0=不限）。配置存 KB/s，这里 ×1024 转字节/秒。
         try:
             self.rate_limit = int(load_config().get('rate_limit', 0) or 0) * 1024
@@ -138,11 +143,13 @@ class Job:
 
     # ---- 解析链接，列出文件 ----
     def prepare(self):
-        typ, handle, key = mega_core.parse_mega_link(self.url)
+        # 注意：必须用 full 解析拿 sub_handle —— 存档链接形如
+        # /folder/<root>#<key>/folder/<sub>，只枚举 root 会把整个存档都建成任务
+        typ, handle, key, sub = mega_core.parse_mega_link_full(self.url)
         if typ is None:
             raise RuntimeError('不是有效的 MEGA 链接')
         if typ == 'folder':
-            for f in mega_core.enum_tree(handle, key):
+            for f in mega_core.enum_tree(handle, key, sub_handle=sub):
                 self.files.append({
                     'name': f['name'], 'relpath': f['relpath'],
                     'size': f['size'], 'downloaded': 0, 'state': 'waiting',
@@ -176,7 +183,12 @@ class Job:
 
     # ---- 目标目录 ----
     def _dest(self, f):
-        return os.path.join(self.save_dir, f['relpath'].replace('/', os.sep))
+        rel = f['relpath'].replace('/', os.sep)
+        # 安全：relpath 若含 .. 或绝对路径，压平到文件名，避免写出任务目录之外
+        safe = os.path.normpath(rel)
+        if safe.startswith('..') or os.path.isabs(safe):
+            safe = os.path.basename(safe) or 'file'
+        return os.path.join(self.save_dir, safe)
 
     def start(self):
         os.makedirs(self.save_dir, exist_ok=True)
@@ -223,6 +235,11 @@ class Job:
         ev['pause'].clear()
         dest = self._dest(f)
         os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
+        # 标记下载前是否已存在（UI 显示「已有」，让"保留结构+跳过已下"可见）
+        try:
+            f['skipped'] = os.path.exists(dest) and os.path.getsize(dest) == f['size']
+        except Exception:
+            f['skipped'] = False
 
         with self.lock:
             f['state'] = 'downloading'
@@ -266,6 +283,8 @@ class Job:
 
     # ---- 状态由各文件实时推导 ----
     def cur_state(self):
+        if getattr(self, 'preparing', False):
+            return 'preparing'
         with self.lock:
             sts = {f['state'] for f in self.files}
         if not sts:
@@ -315,6 +334,7 @@ class Job:
                     'name': f['name'], 'relpath': f['relpath'], 'size': f['size'],
                     'downloaded': d, 'state': f['state'], 'error': f.get('error'),
                     'speed': sp, 'eta': eta, 'priority': f.get('priority', 0),
+                    'skipped': bool(f.get('skipped')),
                     'idx': len(files),
                 })
         total = sum(x['size'] for x in files) or 1
@@ -329,6 +349,7 @@ class Job:
             'downloaded': got,
             'pct': round(got / total * 100, 1),
             'speed': spd, 'eta': eta,
+            'preparing': bool(getattr(self, 'preparing', False)),
             'files': files,
         }
 
@@ -369,6 +390,8 @@ class Job:
                 f['downloaded'] = f['size']
             f.setdefault('priority', 0)
             j.files.append(f)
+        # 从持久化恢复的任务，文件清单已完整，绝不是解析中
+        j.preparing = False
         return j
 
     # ---- 查看连接（a:g 实时取，因为 g-URL 有时效）----
@@ -385,12 +408,26 @@ class Job:
 
     # ---- 打开目录（Windows）----
     def open_dir(self):
-        os.makedirs(self.save_dir, exist_ok=True)
-        if os.name == 'nt':
-            subprocess.Popen(['explorer', self.save_dir])
-        else:
-            subprocess.Popen(['xdg-open', self.save_dir])
-        return self.save_dir
+        """打开任务目录。先规范化路径（历史数据可能含 //// 畸形分隔符），
+        目录不存在时退到父目录，避免资源管理器静默打开默认位置。"""
+        path = os.path.normpath(self.save_dir)
+        if not os.path.isdir(path):
+            parent = os.path.dirname(path)
+            if os.path.isdir(parent):
+                path = parent
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            if os.name == 'nt':
+                os.startfile(path)          # 用 shell 关联打开，比 explorer 参数解析可靠
+            else:
+                subprocess.Popen(['xdg-open', path])
+        except Exception:
+            if os.name == 'nt':
+                subprocess.Popen(['explorer', path])
+        return path
 
 
 # ============ 持久化 ============
@@ -530,27 +567,53 @@ def api_download():
     if not url:
         return jsonify({'error': '缺少链接'}), 400
 
-    # 同一链接已在队列中则复用
+    # 同一链接：进行中直接复用；已完成且文件齐全也复用（避免重复建任务 / 重复下载）
     with jobs_lock:
         for j in jobs.values():
-            if j.url == url and j.cur_state() in ('working', 'paused', 'pending'):
+            if j.url != url:
+                continue
+            st = j.cur_state()
+            if st in ('working', 'paused', 'pending', 'preparing'):
                 return jsonify({'jid': j.jid, 'reused': True})
+            if st == 'done':
+                try:
+                    missing = [f for f in j.files if not os.path.exists(j._dest(f))]
+                except Exception:
+                    missing = []
+                if not missing:
+                    return jsonify({'jid': j.jid, 'reused': True, 'already_done': True})
 
-    try:
-        job = Job(code, url, save_dir).prepare()
-    except Exception as e:
-        return jsonify({'error': f'解析失败: {e}'}), 500
+    # 立即建任务并返回（枚举 MEGA 要好几秒，不能让用户干等且无反馈）
+    job = Job(code, url, save_dir)
     try:
         # 仅当显式传了 rate_limit 才覆盖；否则保持 Job.__init__ 从配置读的默认限速
         if data.get('rate_limit') is not None:
-            # data.rate_limit 单位 KB/s，转字节/秒
             job.rate_limit = max(0, int(data.get('rate_limit') or 0)) * 1024
     except Exception:
         pass
     with jobs_lock:
         jobs[job.jid] = job
-    job.start()
-    return jsonify({'jid': job.jid})
+
+    def _prepare_bg():
+        try:
+            job.prepare()
+        except Exception as e:
+            job.preparing = False
+            job.error = f'解析失败: {str(e)[:200]}'
+            save_state()
+            return
+        job.preparing = False
+        with jobs_lock:
+            if job.jid not in jobs:      # 解析期间被用户移除了
+                return
+        try:
+            job.start()
+        except Exception as e:
+            job.error = f'启动失败: {str(e)[:200]}'
+        save_state()
+
+    threading.Thread(target=_prepare_bg, daemon=True).start()
+    return jsonify({'jid': job.jid, 'preparing': True})
 
 
 @app.get('/api/jobs')
@@ -576,8 +639,10 @@ def _apply_action(job, action):
         if action == 'pause':
             ev['pause'].set()
         elif action in ('cancel', 'remove'):
-            ev['cancel'].set()
-            job.files[i]['state'] = 'cancelled'
+            # 已完成的文件不该被取消（否则「全部取消」会把下完的也改成已取消）
+            if job.files[i]['state'] != 'done':
+                ev['cancel'].set()
+                job.files[i]['state'] = 'cancelled'
 
 
 @app.post('/api/job/<jid>/<action>')
@@ -586,6 +651,36 @@ def api_job_action(jid, action):
         job = jobs.get(jid)
     if not job:
         return jsonify({'error': '任务不存在'}), 404
+    if action == 'opendir':
+        return jsonify({'ok': True, 'path': job.open_dir()})
+    if action == 'remove_disk':
+        # 危险操作：移除任务并删除其磁盘目录。多重安全校验后执行。
+        path = os.path.normpath(job.save_dir or '')
+        root = os.path.normpath((load_config().get('save_dir') or '').strip())
+        # 安全：路径必须非空、不能等于根目录、且必须位于下载根目录之下
+        bad = (not path) or (path == root) or (root and not path.startswith(root + os.sep))
+        if bad:
+            return jsonify({'ok': False, 'error': '路径不安全，拒绝删除: ' + path}), 400
+        # 先取消该任务所有下载（避免边下边删），短暂等待线程退出
+        for i in range(len(job.files)):
+            try:
+                job._events(i)['cancel'].set()
+            except Exception:
+                pass
+        time.sleep(0.4)
+        err = None
+        try:
+            if os.path.isdir(path):
+                import shutil
+                shutil.rmtree(path)
+        except Exception as e:
+            err = str(e)[:200]
+        with jobs_lock:
+            jobs.pop(jid, None)
+        save_state()
+        if err:
+            return jsonify({'ok': False, 'error': '删除失败: ' + err, 'path': path}), 500
+        return jsonify({'ok': True, 'path': path})
     _apply_action(job, action)
     if action == 'remove':
         with jobs_lock:
@@ -631,8 +726,9 @@ def api_file_action(jid, idx, action):
             f['state'] = 'waiting'
             job._pump()
     elif action == 'cancel':
-        ev['cancel'].set()
-        f['state'] = 'cancelled'
+        if f['state'] != 'done':
+            ev['cancel'].set()
+            f['state'] = 'cancelled'
     elif action == 'priority_up':
         f['priority'] = f.get('priority', 0) + 1
     elif action == 'priority_down':
@@ -723,16 +819,21 @@ def api_config_set():
 def api_opendir():
     """打开下载根目录（Windows 资源管理器）"""
     data = request.get_json(silent=True) or {}
-    d = (data.get('path') or '').strip() or load_config()['save_dir']
+    raw = (data.get('path') or '').strip() or load_config()['save_dir']
+    d = os.path.normpath(raw)
     if not os.path.isdir(d):
         try:
             os.makedirs(d, exist_ok=True)
         except Exception:
             pass
-    if os.name == 'nt':
-        subprocess.Popen(['explorer', d])
-    else:
-        subprocess.Popen(['xdg-open', d])
+    try:
+        if os.name == 'nt':
+            os.startfile(d)
+        else:
+            subprocess.Popen(['xdg-open', d])
+    except Exception:
+        if os.name == 'nt':
+            subprocess.Popen(['explorer', d])
     return jsonify({'ok': True, 'path': d})
 
 
