@@ -522,6 +522,20 @@ def api_resolve():
     if from_official:
         result['source'] = '官网'
         result['official'] = True
+    else:
+        # 云端命中了，但简介里没有封面 —— S 类投稿资源在云端数据里普遍没存图。
+        # 这时去官网补一张封面（只补图，不改动云端已有的标题/正文/链接）。
+        try:
+            if not ((result.get('intro') or {}).get('cover')):
+                _off = warehouse_data.search_official(code)
+                _oc = ((_off or {}).get('intro') or {}).get('cover')
+                if _oc:
+                    if not result.get('intro'):
+                        result['intro'] = {}
+                    result['intro']['cover'] = _oc
+                    result['cover_from_official'] = True
+        except Exception:
+            pass
     if alinks:
         for m in result.get('messages', []):
             m['links'] = list(m.get('links', [])) + alinks
