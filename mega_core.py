@@ -141,17 +141,31 @@ def read_exact(raw, n):
     return buf
 
 
-def parse_mega_link(url):
-    """解析 MEGA 链接，返回 (type, handle, key)"""
-    url = url.strip()
-    m = re.search(r'mega\.nz/(folder|file)/([^#/]+)#([^/\s]+)', url)
+def parse_mega_link_full(url):
+    """解析 MEGA 链接，返回 (type, handle, key, sub_handle)。
+
+    支持子文件夹分享链接：mega.nz/folder/<root>#<key>/folder/<sub>
+      -> sub_handle 非 None，表示只关注该子文件夹（MEGA 存档链接用）。
+    普通链接 / 老式 #F! 链接的 sub_handle 为 None。
+    """
+    url = (url or '').strip()
+    m = re.search(r'mega\.nz/folder/([^#/]+)#([^/\s]+)(?:/folder/([^/\s]+))?', url)
     if m:
-        return m.group(1), m.group(2), m.group(3)
+        return 'folder', m.group(1), m.group(2), m.group(3)
+    m = re.search(r'mega\.nz/file/([^#/]+)#([^/\s]+)', url)
+    if m:
+        return 'file', m.group(1), m.group(2), None
     m = re.search(r'mega\.nz/#(F?)!([^!]+)!([^/\s]+)', url)
     if m:
         t = 'folder' if m.group(1) == 'F' else 'file'
-        return t, m.group(2), m.group(3)
-    return None, None, None
+        return t, m.group(2), m.group(3), None
+    return None, None, None, None
+
+
+def parse_mega_link(url):
+    """解析 MEGA 链接，返回 (type, handle, key)（兼容旧调用）"""
+    t, h, k, _ = parse_mega_link_full(url)
+    return t, h, k
 
 
 def _opener(proxy=None):
@@ -202,7 +216,7 @@ def _decrypt_attr_name(node, key_a32):
         return None
 
 
-def enum_tree(folder_id, folder_key, proxy=None):
+def enum_tree(folder_id, folder_key, proxy=None, sub_handle=None):
     """枚举 folder，返回带子目录层级的文件清单。
 
     父文件夹归属改用节点自带的 p 字段（直接父句柄）向上回溯，
@@ -250,11 +264,13 @@ def enum_tree(folder_id, folder_key, proxy=None):
                  if n.get('t') == 1 and n['k'].split('/')[0].split(':', 1)[0] == n['h']}
 
     def build_dir(h):
-        """向上回溯拼出 h 所在目录（不含根）"""
+        """向上回溯拼出 h 所在目录（不含根）。指定 sub_handle 时回溯到该子文件夹即停。"""
         parts = []
         cur = parent_of.get(h)
         seen = set()
         while cur and cur in handles and cur not in roots and cur not in seen:
+            if sub_handle and cur == sub_handle:
+                break
             seen.add(cur)
             parts.append(names.get(cur, cur))
             cur = parent_of.get(cur)
@@ -266,6 +282,19 @@ def enum_tree(folder_id, folder_key, proxy=None):
     for n in nodes:
         if n.get('t') != 0:
             continue
+        # 指定 sub_handle 时，只保留该子文件夹子树下的文件
+        if sub_handle:
+            ok = False
+            cur = n.get('p')
+            seen2 = set()
+            while cur and cur not in seen2:
+                if cur == sub_handle:
+                    ok = True
+                    break
+                seen2.add(cur)
+                cur = parent_of.get(cur)
+            if not ok:
+                continue
         h = n['h']
         name = names.get(h, h)
 

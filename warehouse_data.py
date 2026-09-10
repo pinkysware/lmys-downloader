@@ -12,6 +12,7 @@ warehouse_data.py — 下载器的「云端数据源」层
 """
 
 import os
+import sys
 import io
 import re
 import json
@@ -22,7 +23,16 @@ import urllib.request
 import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LOCAL_CACHE = os.path.join(HERE, '.warehouse_cache.json')
+
+
+def _data_dir():
+    """运行目录。PyInstaller 打包后取 exe 所在目录（避免缓存写进 _MEIPASS 临时目录）。"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+LOCAL_CACHE = os.path.join(_data_dir(), '.warehouse_cache.json')
 
 # 云端数据源（公开站，无需鉴权）。可环境变量覆盖指向其他源。
 DEFAULT_SOURCE = 'https://reimu-warehouse.pages.dev/data.json'
@@ -228,3 +238,73 @@ def search_official(code, timeout=15):
     with _official_lock:
         _official_cache[code] = item
     return item
+
+
+# ============ MEGA 老代码存档（R0008~R4364，已冻结）============
+# 存档不再更新，映射从云端 archive.json 拉取（本地缓存）。
+# 格式: {root:{handle,key}, items:{ "R1725":[{"sub":"BhZwQAoJ","files":1,"size":263704854}] }}
+
+ARCHIVE_URL = 'https://reimu-warehouse.pages.dev/archive.json'
+_archive = None
+_archive_lock = threading.Lock()
+
+
+def load_archive():
+    """加载存档映射（本地缓存优先，否则云端拉取）。失败返回空结构。"""
+    global _archive
+    with _archive_lock:
+        if _archive is not None:
+            return _archive
+        local = os.path.join(_data_dir(), '.archive_cache.json')
+        try:
+            if os.path.exists(local):
+                with io.open(local, encoding='utf-8') as f:
+                    _archive = json.load(f)
+                return _archive
+        except Exception:
+            pass
+        try:
+            op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            req = urllib.request.Request(ARCHIVE_URL,
+                                         headers={'User-Agent': 'ReimuDownloader/1.0'})
+            with op.open(req, timeout=15) as r:
+                _archive = json.loads(r.read().decode('utf-8', 'ignore'))
+            try:
+                with io.open(local, 'w', encoding='utf-8') as f:
+                    json.dump(_archive, f, ensure_ascii=False)
+            except Exception:
+                pass
+        except Exception:
+            # 失败不缓存空结果，下次调用会重试
+            return {'root': {}, 'items': {}}
+        return _archive
+
+
+def archive_links(code):
+    """返回该代码的 MEGA 存档下载链接列表（可能多个子目录）。无则空列表。"""
+    try:
+        a = load_archive()
+        root = a.get('root') or {}
+        h, k = root.get('handle'), root.get('key')
+        if not h or not k:
+            return []
+        entry = (a.get('items') or {}).get(normalize_code(code))
+        if not entry:
+            return []
+        out = []
+        for e in entry:
+            sub = e.get('sub')
+            if not sub:
+                continue
+            out.append({
+                'url': 'https://mega.nz/folder/%s#%s/folder/%s' % (h, k, sub),
+                'type': 'mega',
+                'label': 'MEGA 存档',
+                'variant': '',
+                'code': '',
+                'files': e.get('files', 0),
+                'total_size': e.get('size', 0),
+            })
+        return out
+    except Exception:
+        return []

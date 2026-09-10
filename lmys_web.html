@@ -272,9 +272,13 @@ function renderResult(d){
       h+='<div class="link"><div><span class="badge '+esc(l.type)+'">'+esc(l.label)+'</span>';
       if(l.variant) h+='<span class="var">'+esc(l.variant)+'</span>';
       if(l.code) h+='<span class="code">提取码 '+esc(l.code)+'</span>';
-      // 预检结果占位：简介先出，文件大小由 precheckAll() 异步填充
+      // 文件数/大小：存档链接自带，其余走异步预检
       if(l.type==='mega'){
-        h+='<span class="muted" id="pre_'+id+'">（获取文件大小…）</span>';
+        if(l.files!==undefined){
+          h+='<span class="badge">'+l.files+' 个文件 · '+fmt(l.total_size||0)+'</span>';
+        }else{
+          h+='<span class="muted" id="pre_'+id+'">（获取文件大小…）</span>';
+        }
       }
       h+='</div><span class="u">'+esc(l.url)+'</span><div class="row">';
       if(l.type==='mega'){
@@ -311,6 +315,7 @@ async function precheckAll(d){
   d.messages.forEach(msg=>{
     msg.links.forEach((l,i)=>{
       if(l.type!=='mega') return;
+      if(l.files!==undefined) return;
       const id='pre_lk'+msg.id+'_'+i;
       const el=document.getElementById(id);
       if(!el) return;

@@ -455,20 +455,38 @@ def api_resolve():
         except Exception:
             item = None
 
-    if not item:
+    # MEGA 存档下载链接（独立于官网：有些老代码官网没有简介，但存档里有下载）
+    try:
+        alinks = warehouse_data.archive_links(code)
+    except Exception:
+        alinks = []
+
+    if not item and not alinks:
         return jsonify({
             'code': code.upper(),
             'found': False,
             'messages': [],
             'intro': None,
-            'error': f'未找到 {code.upper()}（云端已收录 {warehouse_data.get_stats()["count"]} 条，官网查询亦无结果）',
-            'source': '云端+官网',
+            'error': f'未找到 {code.upper()}（云端已收录 {warehouse_data.get_stats()["count"]} 条，官网与存档均无结果）',
+            'source': '云端+官网+存档',
         })
+
+    if not item:
+        # 官网也没简介，但存档有下载链接 —— 只给链接
+        item = {'code': code.upper(), 'date': '', 'links': [], 'intro': None}
 
     result = warehouse_data.to_resolve_result(code, item)
     if from_official:
         result['source'] = '官网'
         result['official'] = True
+    if alinks:
+        for m in result.get('messages', []):
+            m['links'] = list(m.get('links', [])) + alinks
+        result['archive'] = True
+        result['found'] = True
+    # 无简介时置 None（避免前端渲染空简介块）
+    if not result.get('intro'):
+        result['intro'] = None
 
     # 秒回：不在这里做 MEGA 预检（预检是网络请求，会拖慢首屏）。
     # 文件数/总大小由前端拿到简介后，异步调 /api/precheck 逐个填充。
