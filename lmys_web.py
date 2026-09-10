@@ -445,17 +445,30 @@ def api_resolve():
         warehouse_data.init()
 
     item = warehouse_data.lookup(code)
+    from_official = False
+    if not item:
+        # 云端未命中 → 官网兜底（老代码：官网收录但 Telegram 仓库没有），
+        # 实时搜 blog.reimu.net（经 Cloudflare 代理），返回简介 + 简介图（无下载链接）。
+        try:
+            item = warehouse_data.search_official(code)
+            from_official = bool(item)
+        except Exception:
+            item = None
+
     if not item:
         return jsonify({
             'code': code.upper(),
             'found': False,
             'messages': [],
             'intro': None,
-            'error': f'未找到 {code.upper()}（云端已收录 {warehouse_data.get_stats()["count"]} 条，可能该代码较新尚未同步或不在收录范围）',
-            'source': '云端',
+            'error': f'未找到 {code.upper()}（云端已收录 {warehouse_data.get_stats()["count"]} 条，官网查询亦无结果）',
+            'source': '云端+官网',
         })
 
     result = warehouse_data.to_resolve_result(code, item)
+    if from_official:
+        result['source'] = '官网'
+        result['official'] = True
 
     # 秒回：不在这里做 MEGA 预检（预检是网络请求，会拖慢首屏）。
     # 文件数/总大小由前端拿到简介后，异步调 /api/precheck 逐个填充。

@@ -2,9 +2,9 @@
 """
 warehouse_data.py — 下载器的「云端数据源」层
 
-下载器用 reimu-warehouse 云端预抓的 data.json 当查询源。
-- 启动/刷新时从 reimu-warehouse.pages.dev/data.json 拉取并缓存到本地
-- 查询走本地缓存（秒回）
+下载器不再实时连 Telegram 搜频道，而是用 reimu-warehouse 云端预抓的 data.json 当查询源。
+- 启动/刷新时从 reimu-warehouse.pages.dev/data.json 拉取并缓存到本地 data_cache.json
+- /api/resolve 查本地缓存（秒回，不依赖 Telegram 凭据）
 
 默认数据源：
   https://reimu-warehouse.pages.dev/data.json   （Cloudflare 公开站）
@@ -12,20 +12,17 @@ warehouse_data.py — 下载器的「云端数据源」层
 """
 
 import os
-import sys
 import io
+import re
 import json
 import time
 import threading
 
 import urllib.request
+import urllib.parse
 
-def _data_dir():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
-
-LOCAL_CACHE = os.path.join(_data_dir(), '.warehouse_cache.json')
+HERE = os.path.dirname(os.path.abspath(__file__))
+LOCAL_CACHE = os.path.join(HERE, '.warehouse_cache.json')
 
 # 云端数据源（公开站，无需鉴权）。可环境变量覆盖指向其他源。
 DEFAULT_SOURCE = 'https://reimu-warehouse.pages.dev/data.json'
@@ -165,3 +162,69 @@ def to_resolve_result(code, item):
         'intro': intro,
         'source': '云端',
     }
+
+
+# ============ 老代码官网兜底 ============
+# 云端 data.json 覆盖 R2182~R4411；更早的代码（R0099~R2181）官网收录但云端没有。
+# 通过 Cloudflare Pages Function(/api/search) 实时搜官网，拿「简介 + 简介图」（无下载链接）。
+# 官网代码格式为 4 位补零（R0099 / R0500 / R4195），故查询前先规范化。
+
+OFFICIAL_API = 'https://reimu-warehouse.pages.dev/api/search'
+_official_cache = {}          # code -> item 或 None
+_official_lock = threading.Lock()
+
+
+def normalize_code(raw):
+    """官网代码规范化：纯数字默认补 R（2999 -> R2999），再补零到 4 位（R100 -> R0100）。"""
+    s = (raw or '').strip().upper()
+    if s.isdigit():
+        s = 'R' + s
+    m = re.match(r'^([RS])(\d{1,6})$', s)
+    if not m:
+        return s
+    return m[1] + m[2].zfill(4)
+
+
+def search_official(code, timeout=15):
+    """官网兜底查询。返回 item 结构（links 为空 + intro）或 None。
+
+    直连 pages.dev（Cloudflare CDN 境内可达），显式禁用系统代理避免走错。
+    带内存缓存，同一代码不重复请求。
+    """
+    code = normalize_code(code)
+    with _official_lock:
+        if code in _official_cache:
+            return _official_cache[code]
+
+    item = None
+    try:
+        op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        url = OFFICIAL_API + '?code=' + urllib.parse.quote(code)
+        req = urllib.request.Request(url, headers={'User-Agent': 'ReimuDownloader/1.0'})
+        with op.open(req, timeout=timeout) as r:
+            d = json.loads(r.read().decode('utf-8', 'ignore'))
+        if d.get('found'):
+            item = {
+                'code': d.get('code') or code,
+                'date': d.get('date') or '',
+                'links': [],
+                'intro': {
+                    'title': d.get('title') or '',
+                    'raw_title': d.get('title') or '',
+                    'body': d.get('summary') or '',
+                    'cover': d.get('cover') or '',
+                    'platforms': [],
+                    'categories': [],
+                    'tags': [],
+                    'detail_url': d.get('detail_url') or '',
+                    'date': d.get('date') or '',
+                    'from_official': True,
+                },
+                'source': '官网',
+            }
+    except Exception:
+        item = None
+
+    with _official_lock:
+        _official_cache[code] = item
+    return item

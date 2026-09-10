@@ -220,7 +220,7 @@ async function resolve(){
   const code=document.getElementById('code').value.trim();
   const m=document.getElementById('msg'), r=document.getElementById('result');
   if(!code){ m.innerHTML='<div class="err">请输入代码</div>'; return; }
-  m.innerHTML='<div class="muted">正在云端查询…</div>'; r.innerHTML='';
+  m.innerHTML='<div class="muted">正在查询…</div>'; r.innerHTML='';
   try{
     const res=await fetch('/api/resolve',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
@@ -235,7 +235,7 @@ async function resolve(){
 function introHtml(d){
   const it=d.intro; let s='<div class="card intro">';
   s+='<div class="irow">';
-  if(it.cover) s+='<img class="thumb" src="'+esc(it.cover)+'" alt="cover">';
+  if(it.cover) s+='<img class="thumb" src="'+esc(it.cover)+'" alt="cover" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">';
   s+='<div class="imeta">';
   s+='<div class="ititle">'+esc(it.title)+'</div>';
   if(it.platforms&&it.platforms.length)
@@ -258,8 +258,15 @@ function renderResult(d){
   let h='';
   if(d.intro && !d.intro.error) h+=introHtml(d);
   d.messages.forEach(msg=>{
-    h+='<div class="card"><div class="muted">'+esc(d.code)+' · '+esc(d.date||'')+'</div>';
-    if(!msg.links.length) h+='<div class="muted">该消息未检测到链接</div>';
+    h+='<div class="card"><div class="muted">'+esc(d.code)+' · '+esc(d.date||'')+(d.official?' · 来源：官网':'')+'</div>';
+    if(!msg.links.length){
+      if(d.official && d.intro && d.intro.detail_url){
+        h+='<div class="muted" style="margin-top:6px">此资源来自官网早期投稿，<b>暂无下载链接</b>（下载链接仅在 Telegram 仓库频道提供）。</div>';
+        h+='<div class="row" style="margin-top:8px"><a class="open" target="_blank" rel="noopener" href="'+esc(d.intro.detail_url)+'"><button>查看官网详情页</button></a></div>';
+      }else{
+        h+='<div class="muted">该消息未检测到链接</div>';
+      }
+    }
     msg.links.forEach((l,i)=>{
       const id='lk'+msg.id+'_'+i;
       h+='<div class="link"><div><span class="badge '+esc(l.type)+'">'+esc(l.label)+'</span>';
