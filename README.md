@@ -36,9 +36,9 @@
 
 下载 Release 里的 `lmys-downloader.exe`，双击即用，**无需安装 Python**。
 
-### 方式二：便携源码包（适合改 bug / 二次开发）
+### 方式二：源码包（适合改 bug / 二次开发）
 
-下载 Release 里的 `lmys-downloader-portable.zip`（约 160KB，仅源码 + 启动脚本），解压后：
+下载 Release 里的 `lmys-downloader-src.zip`（约 160KB，仅源码 + 启动脚本），解压后：
 
 1. 先装 [Python 3.9+](https://www.python.org/downloads/)（安装时勾选 **Add Python to PATH**）
 2. **双击 `启动.bat`** —— 会自动装依赖并启动，浏览器自动打开
