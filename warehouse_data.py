@@ -38,11 +38,17 @@ LOCAL_CACHE = os.path.join(_data_dir(), '.warehouse_cache.json')
 DEFAULT_SOURCE = 'https://reimu-warehouse.pages.dev/data.json'
 SOURCE_URL = os.environ.get('WAREHOUSE_DATA_URL', DEFAULT_SOURCE)
 
+# 本地数据缓存的有效期（秒）：超过后由后台线程自动重拉云端。
+# 之前没有 TTL -> 进程启动一次就读旧缓存永不更新，新资源查不到会误回退到官网。
+# 设为 0 可关闭自动刷新。可用环境变量 WAREHOUSE_CACHE_TTL 覆盖。
+CACHE_TTL = int(os.environ.get('WAREHOUSE_CACHE_TTL', '1800'))
+
 _lock = threading.Lock()
 _data = []          # 原始 items 列表（保持 data.json 顺序）
 _by_code = {}       # code -> item
 _updated_at = ''
 _last_fetch = 0
+_refresh_thread = None
 
 
 def load_local():
@@ -63,12 +69,14 @@ def fetch_remote(timeout=60):
     """从云端拉取最新 data.json 并覆盖缓存"""
     global _data, _by_code, _updated_at, _last_fetch
     req = urllib.request.Request(SOURCE_URL,
-                                 headers={'User-Agent': 'ReimuDownloader/1.0'})
+                                 headers={'User-Agent': 'ReimuDownloader/1.0',
+                                          'Cache-Control': 'no-cache'})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = r.read()
     d = json.loads(raw.decode('utf-8'))
     with _lock:
         _set(d)
+        _last_fetch = time.time()
         # 写本地缓存
         try:
             with io.open(LOCAL_CACHE, 'w', encoding='utf-8') as f:
@@ -88,18 +96,56 @@ def _set(d):
             _by_code[it['code'].upper()] = it
 
 
+def _cache_age():
+    """本地缓存文件年龄（秒）。文件不存在返回一个极大值。"""
+    try:
+        return time.time() - os.path.getmtime(LOCAL_CACHE)
+    except Exception:
+        return 1e9
+
+
+def _bg_refresh_loop(do_now=False):
+    """后台刷新：先（可选）立刻拉一次，之后每 60s 检查，缓存过期就重拉。"""
+    if do_now:
+        try:
+            fetch_remote()
+        except Exception:
+            pass
+    while True:
+        time.sleep(60)
+        try:
+            if CACHE_TTL > 0 and _cache_age() > CACHE_TTL:
+                fetch_remote()
+        except Exception:
+            pass
+
+
+def start_auto_refresh(do_now=False):
+    """启动后台自动刷新线程（幂等）。do_now=True 时线程内先立即拉一次。"""
+    global _refresh_thread
+    if CACHE_TTL <= 0:
+        return
+    if _refresh_thread is not None and _refresh_thread.is_alive():
+        return
+    _refresh_thread = threading.Thread(target=_bg_refresh_loop, args=(do_now,), daemon=True)
+    _refresh_thread.start()
+
+
 def init(force_refresh=False, timeout=60):
-    """初始化：先本地缓存；可选强制拉云端刷新"""
-    if not load_local():
+    """初始化：本地缓存优先。
+
+    - 缓存不存在 / 显式 force_refresh -> 同步拉一次云端
+    - 缓存存在但已过期 -> **不在启动路径阻塞**，交给后台线程立刻补拉
+      （启动要快，避免浏览器打开时还没监听端口）
+    - 随后启动常驻后台刷新线程
+    """
+    had = load_local()
+    if force_refresh or not had:
         try:
             fetch_remote(timeout=timeout)
         except Exception:
             pass  # 拉不到也静默，查询会返回未命中
-    elif force_refresh:
-        try:
-            fetch_remote(timeout=timeout)
-        except Exception:
-            pass
+    start_auto_refresh(do_now=bool(had and _cache_age() > CACHE_TTL))
     return get_stats()
 
 
