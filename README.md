@@ -8,6 +8,10 @@
 > 简化了去 Telegram 频道和 MEGA 网盘找链接的步骤，MEGA 网盘下载仍然需要代理。
 > 纯 AI 编写，有 BUG 请找 AI 问。
 
+<p align="center">
+  <img src="docs/screenshot.png" width="820" alt="界面预览：解析资源、显示简介封面与下载链接、任务列表">
+</p>
+
 ## 功能特性
 
 - **纯浏览器操作**：本机 `http://127.0.0.1:8765` 访问，电脑 / 手机 / 平板都能用
