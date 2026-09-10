@@ -463,10 +463,11 @@ def download_file(handle, file_key_a32, size, dest_path, progress_cb=None,
     k_str = a32_to_bytes(list(k))
 
     proxy = _cur_proxy(proxy)
-    # proxy 非空走代理；为空时 trust_env=False 强制 requests 直连
-    # （否则 requests 会读系统 http_proxy 环境变量，走错代理导致 502/超时）
+    # 代理完全由 proxies 参数控制；trust_env=False 避免 requests 读系统
+    # http_proxy 环境变量走错代理（注意 trust_env 是 Session 属性，不是 get() 参数）
     proxies = {'http': proxy, 'https': proxy} if proxy else None
-    _trust_env = bool(proxy)
+    _sess = requests.Session()
+    _sess.trust_env = False
 
     retry = 0
     quota_wait = 60          # 509 配额等待：60s 起，逐次加倍，上限 30min
@@ -502,9 +503,8 @@ def download_file(handle, file_key_a32, size, dest_path, progress_cb=None,
             headers = {'User-Agent': 'Mozilla/5.0'}
             if offset > 0:
                 headers['Range'] = f'bytes={offset}-'
-            resp = requests.get(file_url, headers=headers, stream=True,
-                                proxies=proxies, timeout=(15, 60),
-                                trust_env=_trust_env)
+            resp = _sess.get(file_url, headers=headers, stream=True,
+                             proxies=proxies, timeout=(15, 60))
         except Exception as e:
             retry += 1
             if retry > max_retries:

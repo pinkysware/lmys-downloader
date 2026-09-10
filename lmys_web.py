@@ -232,6 +232,7 @@ class Job:
                 f['downloaded'] = dl
                 f['state'] = 'downloading'
 
+        _logs = []
         try:
             st, n = mega_core.download_file(
                 f['handle'], f['file_key'], f['size'], dest,
@@ -239,7 +240,8 @@ class Job:
                 folder_id=self.folder_id,
                 is_public=f['is_public'],
                 pause_ev=ev['pause'], cancel_ev=ev['cancel'],
-                rate_limit=self.rate_limit)
+                rate_limit=self.rate_limit,
+                log=lambda m: _logs.append(str(m)))
         except Exception as e:
             st, n = 'error', str(e)
 
@@ -249,7 +251,11 @@ class Job:
             if st == 'done':
                 f['downloaded'] = f['size']
             elif st == 'error':
-                f['error'] = str(n)[:200]
+                # 保留详情：优先异常信息，否则取下载器日志末尾
+                detail = str(n)
+                if (not detail or detail == '0') and _logs:
+                    detail = ' / '.join(_logs[-3:])
+                f['error'] = detail[:300]
         save_state()
         # 释放并发槽位，并拉起下一个等待中的文件
         try:
