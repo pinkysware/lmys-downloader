@@ -128,6 +128,7 @@
     <div class="row">
       <input type="text" id="code" placeholder="输入资源代码" autocomplete="off">
       <button class="primary" onclick="resolve()">解析</button>
+      <button id="btnRefresh" onclick="refreshData()" title="从云端重新拉取最新资源数据（刚发布的资源搜不到时点它）">刷新数据</button>
     </div>
     <div class="muted" style="margin-top:8px">
       R 开头一般为 MEGA（服务端直接下载）；S 开头可能是磁力/百度网盘等（在你当前设备打开）
@@ -242,6 +243,29 @@ async function resolve(){
     if(!d.found){ m.innerHTML='<div class="muted">'+esc((d.error)||('云端未找到代码 '+esc(code)))+'</div>'; return; }
     renderResult(d);
   }catch(e){ m.innerHTML='<div class="err">请求失败: '+esc(e)+'</div>'; }
+}
+
+/* ---------------- 刷新云端数据 ---------------- */
+async function refreshData(){
+  const btn=document.getElementById('btnRefresh');
+  const m=document.getElementById('msg');
+  const old=btn.textContent;
+  btn.disabled=true; btn.textContent='刷新中…';
+  m.innerHTML='<div class="muted">正在从云端重新拉取资源数据…</div>';
+  try{
+    const res=await fetch('/api/refresh',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:'{}'});
+    const d=await res.json();
+    if(d.ok){
+      m.innerHTML='<div class="muted">数据已更新：'+esc(String(d.count))+' 条 · '+esc(d.updated_at||'')+'</div>';
+      // 输入框里还有代码就顺手重查一次
+      const code=document.getElementById('code').value.trim();
+      if(code) resolve();
+    }else{
+      m.innerHTML='<div class="err">刷新失败: '+esc(d.error||'未知错误')+'</div>';
+    }
+  }catch(e){ m.innerHTML='<div class="err">刷新失败: '+esc(e)+'</div>'; }
+  btn.disabled=false; btn.textContent=old;
 }
 
 function introHtml(d){
